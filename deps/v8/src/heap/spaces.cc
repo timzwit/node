@@ -1327,8 +1327,8 @@ static SlotSet* AllocateAndInitializeSlotSet(size_t size, Address page_start) {
   return slot_set;
 }
 
-template SlotSet* MemoryChunk::AllocateSlotSet<OLD_TO_NEW>();
-template SlotSet* MemoryChunk::AllocateSlotSet<OLD_TO_OLD>();
+template V8_EXPORT_PRIVATE SlotSet* MemoryChunk::AllocateSlotSet<OLD_TO_NEW>();
+template V8_EXPORT_PRIVATE SlotSet* MemoryChunk::AllocateSlotSet<OLD_TO_OLD>();
 
 template <RememberedSetType type>
 SlotSet* MemoryChunk::AllocateSlotSet() {
@@ -3255,9 +3255,11 @@ bool PagedSpace::RawSlowRefillLinearAllocationArea(int size_in_bytes) {
               static_cast<size_t>(size_in_bytes)))
         return true;
     }
-  } else if (is_local()) {
-    // Sweeping not in progress and we are on a {CompactionSpace}. This can
-    // only happen when we are evacuating for the young generation.
+  }
+
+  if (is_local()) {
+    // The main thread may have acquired all swept pages. Try to steal from
+    // it. This can only happen during young generation evacuation.
     PagedSpace* main_space = heap()->paged_space(identity());
     Page* page = main_space->RemovePageSafe(size_in_bytes);
     if (page != nullptr) {
@@ -3300,6 +3302,12 @@ void ReadOnlyPage::MakeHeaderRelocatable() {
     mutex_ = nullptr;
     local_tracker_ = nullptr;
     reservation_.Reset();
+  }
+}
+
+void ReadOnlySpace::Forget() {
+  for (Page* p : *this) {
+    heap()->memory_allocator()->PreFreeMemory(p);
   }
 }
 

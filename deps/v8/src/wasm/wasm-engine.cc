@@ -135,12 +135,17 @@ MaybeHandle<AsmWasmData> WasmEngine::SyncCompileTranslatedAsmJs(
   ModuleResult result =
       DecodeWasmModule(kAsmjsWasmFeatures, bytes.start(), bytes.end(), false,
                        kAsmJsOrigin, isolate->counters(), allocator());
-  CHECK(!result.failed());
+  if (result.failed()) {
+    // This happens once in a while when we have missed some limit check
+    // in the asm parser. Output an error message to help diagnose, but crash.
+    std::cout << result.error().message();
+    UNREACHABLE();
+  }
 
   // Transfer ownership of the WasmModule to the {Managed<WasmModule>} generated
   // in {CompileToNativeModule}.
   Handle<FixedArray> export_wrappers;
-  std::unique_ptr<NativeModule> native_module =
+  std::shared_ptr<NativeModule> native_module =
       CompileToNativeModule(isolate, kAsmjsWasmFeatures, thrower,
                             std::move(result).value(), bytes, &export_wrappers);
   if (!native_module) return {};
@@ -188,7 +193,7 @@ MaybeHandle<WasmModuleObject> WasmEngine::SyncCompile(
   // Transfer ownership of the WasmModule to the {Managed<WasmModule>} generated
   // in {CompileToModuleObject}.
   Handle<FixedArray> export_wrappers;
-  std::unique_ptr<NativeModule> native_module =
+  std::shared_ptr<NativeModule> native_module =
       CompileToNativeModule(isolate, enabled, thrower,
                             std::move(result).value(), bytes, &export_wrappers);
   if (!native_module) return {};
@@ -250,7 +255,6 @@ void WasmEngine::AsyncInstantiate(
     // We have to move the exception to the promise chain.
     Handle<Object> exception(isolate->pending_exception(), isolate);
     isolate->clear_pending_exception();
-    DCHECK(*isolate->external_caught_exception_address());
     *isolate->external_caught_exception_address() = false;
     resolver->OnInstantiationFailed(exception);
     thrower.Reset();
@@ -438,14 +442,12 @@ void WasmEngine::AddIsolate(Isolate* isolate) {
   auto callback = [](v8::Isolate* v8_isolate, v8::GCType type,
                      v8::GCCallbackFlags flags, void* data) {
     Isolate* isolate = reinterpret_cast<Isolate*>(v8_isolate);
+    Counters* counters = isolate->counters();
     WasmEngine* engine = isolate->wasm_engine();
     base::MutexGuard lock(&engine->mutex_);
     DCHECK_EQ(1, engine->isolates_.count(isolate));
-    for (NativeModule* native_module :
-         engine->isolates_[isolate]->native_modules) {
-      int code_size =
-          static_cast<int>(native_module->committed_code_space() / MB);
-      isolate->counters()->wasm_module_code_size_mb()->AddSample(code_size);
+    for (auto* native_module : engine->isolates_[isolate]->native_modules) {
+      native_module->SampleCodeSize(counters, NativeModule::kSampling);
     }
   };
   isolate->heap()->AddGCEpilogueCallback(callback, v8::kGCTypeMarkSweepCompact,
@@ -489,10 +491,10 @@ void WasmEngine::EnableCodeLogging(Isolate* isolate) {
   it->second->log_codes = true;
 }
 
-std::unique_ptr<NativeModule> WasmEngine::NewNativeModule(
+std::shared_ptr<NativeModule> WasmEngine::NewNativeModule(
     Isolate* isolate, const WasmFeatures& enabled, size_t code_size_estimate,
     bool can_request_more, std::shared_ptr<const WasmModule> module) {
-  std::unique_ptr<NativeModule> native_module =
+  std::shared_ptr<NativeModule> native_module =
       code_manager_.NewNativeModule(this, isolate, enabled, code_size_estimate,
                                     can_request_more, std::move(module));
   base::MutexGuard lock(&mutex_);
@@ -515,6 +517,40 @@ void WasmEngine::FreeNativeModule(NativeModule* native_module) {
     isolates_per_native_module_.erase(it);
   }
   code_manager_.FreeNativeModule(native_module);
+}
+
+namespace {
+class SampleTopTierCodeSizeTask : public CancelableTask {
+ public:
+  SampleTopTierCodeSizeTask(Isolate* isolate,
+                            std::weak_ptr<NativeModule> native_module)
+      : CancelableTask(isolate),
+        isolate_(isolate),
+        native_module_(std::move(native_module)) {}
+
+  void RunInternal() override {
+    if (std::shared_ptr<NativeModule> native_module = native_module_.lock()) {
+      native_module->SampleCodeSize(isolate_->counters(),
+                                    NativeModule::kAfterTopTier);
+    }
+  }
+
+ private:
+  Isolate* const isolate_;
+  const std::weak_ptr<NativeModule> native_module_;
+};
+}  // namespace
+
+void WasmEngine::SampleTopTierCodeSizeInAllIsolates(
+    const std::shared_ptr<NativeModule>& native_module) {
+  base::MutexGuard lock(&mutex_);
+  DCHECK_EQ(1, isolates_per_native_module_.count(native_module.get()));
+  for (Isolate* isolate : isolates_per_native_module_[native_module.get()]) {
+    DCHECK_EQ(1, isolates_.count(isolate));
+    IsolateInfo* info = isolates_[isolate].get();
+    info->foreground_task_runner->PostTask(
+        base::make_unique<SampleTopTierCodeSizeTask>(isolate, native_module));
+  }
 }
 
 namespace {

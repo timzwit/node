@@ -73,7 +73,6 @@ enum class PrimitiveType { kBoolean, kNumber, kString, kSymbol };
   V(MutableHeapNumberMap, mutable_heap_number_map, MutableHeapNumberMap)       \
   V(NanValue, nan_value, Nan)                                                  \
   V(NoClosuresCellMap, no_closures_cell_map, NoClosuresCellMap)                \
-  V(NoFeedbackCellMap, no_feedback_cell_map, NoFeedbackCellMap)                \
   V(NullValue, null_value, Null)                                               \
   V(OneClosureCellMap, one_closure_cell_map, OneClosureCellMap)                \
   V(PreparseDataMap, preparse_data_map, PreparseDataMap)                       \
@@ -357,6 +356,12 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   TNode<JSDataView> HeapObjectToJSDataView(TNode<HeapObject> heap_object,
                                            Label* fail) {
     GotoIfNot(IsJSDataView(heap_object), fail);
+    return CAST(heap_object);
+  }
+
+  TNode<JSProxy> HeapObjectToJSProxy(TNode<HeapObject> heap_object,
+                                     Label* fail) {
+    GotoIfNot(IsJSProxy(heap_object), fail);
     return CAST(heap_object);
   }
 
@@ -1466,7 +1471,7 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   // Allocate an appropriate one- or two-byte ConsString with the first and
   // second parts specified by |left| and |right|.
   TNode<String> AllocateConsString(TNode<Uint32T> length, TNode<String> left,
-                                   TNode<String> right);
+                                   TNode<String> right, Variable* var_feedback);
 
   TNode<NameDictionary> AllocateNameDictionary(int at_least_space_for);
   TNode<NameDictionary> AllocateNameDictionary(
@@ -2031,8 +2036,13 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   // Type conversions.
   // Throws a TypeError for {method_name} if {value} is not coercible to Object,
   // or returns the {value} converted to a String otherwise.
-  TNode<String> ToThisString(Node* context, Node* value,
-                             char const* method_name);
+  TNode<String> ToThisString(TNode<Context> context, TNode<Object> value,
+                             TNode<String> method_name);
+  TNode<String> ToThisString(TNode<Context> context, TNode<Object> value,
+                             char const* method_name) {
+    return ToThisString(context, value, StringConstant(method_name));
+  }
+
   // Throws a TypeError for {method_name} if {value} is neither of the given
   // {primitive_type} nor a JSValue wrapping a value of {primitive_type}, or
   // returns the {value} (or wrapped value) otherwise.
@@ -2271,7 +2281,8 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
 
   // Return a new string object produced by concatenating |first| with |second|.
   TNode<String> StringAdd(Node* context, TNode<String> first,
-                          TNode<String> second);
+                          TNode<String> second,
+                          Variable* var_feedback = nullptr);
 
   // Check if |string| is an indirect (thin or flat cons) string type that can
   // be dereferenced by DerefIndirectString.
@@ -2527,9 +2538,10 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   // Calculates array index for given dictionary entry and entry field.
   // See Dictionary::EntryToIndex().
   template <typename Dictionary>
-  TNode<IntPtrT> EntryToIndex(TNode<IntPtrT> entry, int field_index);
+  V8_EXPORT_PRIVATE TNode<IntPtrT> EntryToIndex(TNode<IntPtrT> entry,
+                                                int field_index);
   template <typename Dictionary>
-  TNode<IntPtrT> EntryToIndex(TNode<IntPtrT> entry) {
+  V8_EXPORT_PRIVATE TNode<IntPtrT> EntryToIndex(TNode<IntPtrT> entry) {
     return EntryToIndex<Dictionary>(entry, Dictionary::kEntryKeyIndex);
   }
 
@@ -2849,14 +2861,20 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   // Load type feedback vector from the stub caller's frame.
   TNode<FeedbackVector> LoadFeedbackVectorForStub();
 
-  // Load type feedback vector for the given closure.
-  TNode<FeedbackVector> LoadFeedbackVector(SloppyTNode<JSFunction> closure,
-                                           Label* if_undefined = nullptr);
+  // Load the value from closure's feedback cell.
+  TNode<HeapObject> LoadFeedbackCellValue(SloppyTNode<JSFunction> closure);
 
   // Load the object from feedback vector cell for the given closure.
   // The returned object could be undefined if the closure does not have
   // a feedback vector associated with it.
-  TNode<Object> LoadFeedbackVectorUnchecked(SloppyTNode<JSFunction> closure);
+  TNode<HeapObject> LoadFeedbackVector(SloppyTNode<JSFunction> closure);
+
+  // Load the ClosureFeedbackCellArray that contains the feedback cells
+  // used when creating closures from this function. This array could be
+  // directly hanging off the FeedbackCell when there is no feedback vector
+  // or available from the feedback vector's header.
+  TNode<ClosureFeedbackCellArray> LoadClosureFeedbackArray(
+      SloppyTNode<JSFunction> closure);
 
   // Update the type feedback vector.
   void UpdateFeedback(Node* feedback, Node* feedback_vector, Node* slot_id);
@@ -3189,8 +3207,11 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
                                Label* if_fast, Label* if_slow);
   Node* CheckEnumCache(Node* receiver, Label* if_empty, Label* if_runtime);
 
-  TNode<IntPtrT> GetArgumentsLength(CodeStubArguments* args);
-  TNode<Object> GetArgumentValue(CodeStubArguments* args, TNode<IntPtrT> index);
+  TNode<Object> GetArgumentValue(BaseBuiltinsFromDSLAssembler::Arguments args,
+                                 TNode<IntPtrT> index);
+
+  BaseBuiltinsFromDSLAssembler::Arguments GetFrameArguments(
+      TNode<RawPtrT> frame, TNode<IntPtrT> argc);
 
   // Support for printf-style debugging
   void Print(const char* s);
@@ -3306,11 +3327,6 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
 
   typedef std::function<void(TNode<IntPtrT> descriptor_key_index)>
       ForEachDescriptorBodyFunction;
-
-  void DescriptorArrayForEach(VariableList& variable_list,
-                              TNode<Uint32T> start_descriptor,
-                              TNode<Uint32T> end_descriptor,
-                              const ForEachDescriptorBodyFunction& body);
 
   // Descriptor array accessors based on key_index, which is equal to
   // DescriptorArray::ToKeyIndex(descriptor).
@@ -3463,7 +3479,7 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
                                                 int additional_offset = 0);
 };
 
-class CodeStubArguments {
+class V8_EXPORT_PRIVATE CodeStubArguments {
  public:
   typedef compiler::Node Node;
   template <class T>
@@ -3486,6 +3502,17 @@ class CodeStubArguments {
   CodeStubArguments(CodeStubAssembler* assembler, Node* argc, Node* fp,
                     CodeStubAssembler::ParameterMode param_mode,
                     ReceiverMode receiver_mode = ReceiverMode::kHasReceiver);
+
+  // Used by Torque to construct arguments based on a Torque-defined
+  // struct of values.
+  CodeStubArguments(CodeStubAssembler* assembler,
+                    BaseBuiltinsFromDSLAssembler::Arguments torque_arguments)
+      : assembler_(assembler),
+        argc_mode_(CodeStubAssembler::INTPTR_PARAMETERS),
+        receiver_mode_(ReceiverMode::kHasReceiver),
+        argc_(torque_arguments.length),
+        base_(torque_arguments.base),
+        fp_(torque_arguments.frame) {}
 
   TNode<Object> GetReceiver() const;
   // Replaces receiver argument on the expression stack. Should be used only
@@ -3514,6 +3541,13 @@ class CodeStubArguments {
   Node* GetLength(CodeStubAssembler::ParameterMode mode) const {
     DCHECK_EQ(mode, argc_mode_);
     return argc_;
+  }
+
+  BaseBuiltinsFromDSLAssembler::Arguments GetTorqueArguments() const {
+    DCHECK_EQ(argc_mode_, CodeStubAssembler::INTPTR_PARAMETERS);
+    return BaseBuiltinsFromDSLAssembler::Arguments{
+        assembler_->UncheckedCast<RawPtrT>(fp_), base_,
+        assembler_->UncheckedCast<IntPtrT>(argc_)};
   }
 
   TNode<Object> GetOptionalArgumentValue(TNode<IntPtrT> index) {
@@ -3553,7 +3587,7 @@ class CodeStubArguments {
   CodeStubAssembler::ParameterMode argc_mode_;
   ReceiverMode receiver_mode_;
   Node* argc_;
-  TNode<WordT> arguments_;
+  TNode<RawPtrT> base_;
   Node* fp_;
 };
 

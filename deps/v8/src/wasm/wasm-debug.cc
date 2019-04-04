@@ -196,6 +196,7 @@ class InterpreterHandle {
 
     uint32_t activation_id = StartActivation(frame_pointer);
 
+    WasmCodeRefScope code_ref_scope;
     WasmInterpreter::Thread* thread = interpreter_.GetThread(0);
     thread->InitFrame(&module()->functions[func_index], wasm_args.start());
     bool finished = false;
@@ -526,7 +527,7 @@ Handle<WasmDebugInfo> WasmDebugInfo::New(Handle<WasmInstanceObject> instance) {
   DCHECK(!instance->has_debug_info());
   Factory* factory = instance->GetIsolate()->factory();
   Handle<WasmDebugInfo> debug_info = Handle<WasmDebugInfo>::cast(
-      factory->NewStruct(WASM_DEBUG_INFO_TYPE, TENURED));
+      factory->NewStruct(WASM_DEBUG_INFO_TYPE, AllocationType::kOld));
   debug_info->set_wasm_instance(*instance);
   debug_info->set_interpreted_functions(*factory->empty_fixed_array());
   instance->set_debug_info(*debug_info);
@@ -545,9 +546,7 @@ wasm::WasmInterpreter* WasmDebugInfo::SetupForTesting(
   auto interp_handle = Managed<wasm::InterpreterHandle>::Allocate(
       isolate, interpreter_size, isolate, debug_info);
   debug_info->set_interpreter_handle(*interp_handle);
-  auto ret = interp_handle->raw()->interpreter();
-  ret->SetCallIndirectTestMode();
-  return ret;
+  return interp_handle->raw()->interpreter();
 }
 
 void WasmDebugInfo::SetBreakpoint(Handle<WasmDebugInfo> debug_info,
@@ -580,12 +579,20 @@ void WasmDebugInfo::RedirectToInterpreter(Handle<WasmDebugInfo> debug_info,
     DCHECK_GT(module->functions.size(), func_index);
     if (!interpreted_functions->get(func_index)->IsUndefined(isolate)) continue;
 
-    wasm::WasmCode* wasm_new_code = compiler::CompileWasmInterpreterEntry(
-        isolate->wasm_engine(), native_module, func_index,
+    wasm::WasmCodeRefScope code_ref_scope;
+    wasm::WasmCompilationResult result = compiler::CompileWasmInterpreterEntry(
+        isolate->wasm_engine(), native_module->enabled_features(), func_index,
         module->functions[func_index].sig);
-    native_module->PublishInterpreterEntry(wasm_new_code, func_index);
-    Handle<Foreign> foreign_holder = isolate->factory()->NewForeign(
-        wasm_new_code->instruction_start(), TENURED);
+    std::unique_ptr<wasm::WasmCode> wasm_code = native_module->AddCode(
+        func_index, result.code_desc, result.frame_slot_count,
+        result.tagged_parameter_slots, std::move(result.protected_instructions),
+        std::move(result.source_positions), wasm::WasmCode::kInterpreterEntry,
+        wasm::ExecutionTier::kInterpreter);
+    Address instruction_start = wasm_code->instruction_start();
+    native_module->PublishCode(std::move(wasm_code));
+
+    Handle<Foreign> foreign_holder =
+        isolate->factory()->NewForeign(instruction_start, AllocationType::kOld);
     interpreted_functions->set(func_index, *foreign_holder);
   }
 }
@@ -644,7 +651,7 @@ Handle<JSFunction> WasmDebugInfo::GetCWasmEntry(
   DCHECK_EQ(debug_info->has_c_wasm_entries(),
             debug_info->has_c_wasm_entry_map());
   if (!debug_info->has_c_wasm_entries()) {
-    auto entries = isolate->factory()->NewFixedArray(4, TENURED);
+    auto entries = isolate->factory()->NewFixedArray(4, AllocationType::kOld);
     debug_info->set_c_wasm_entries(*entries);
     size_t map_size = 0;  // size estimate not so important here.
     auto managed_map = Managed<wasm::SignatureMap>::Allocate(isolate, map_size);
@@ -657,7 +664,7 @@ Handle<JSFunction> WasmDebugInfo::GetCWasmEntry(
     index = static_cast<int32_t>(map->FindOrInsert(*sig));
     if (index == entries->length()) {
       entries = isolate->factory()->CopyFixedArrayAndGrow(
-          entries, entries->length(), TENURED);
+          entries, entries->length(), AllocationType::kOld);
       debug_info->set_c_wasm_entries(*entries);
     }
     DCHECK(entries->get(index)->IsUndefined(isolate));
@@ -665,7 +672,7 @@ Handle<JSFunction> WasmDebugInfo::GetCWasmEntry(
         compiler::CompileCWasmEntry(isolate, sig).ToHandleChecked();
     Handle<WasmExportedFunctionData> function_data =
         Handle<WasmExportedFunctionData>::cast(isolate->factory()->NewStruct(
-            WASM_EXPORTED_FUNCTION_DATA_TYPE, TENURED));
+            WASM_EXPORTED_FUNCTION_DATA_TYPE, AllocationType::kOld));
     function_data->set_wrapper_code(*new_entry_code);
     function_data->set_instance(debug_info->wasm_instance());
     function_data->set_jump_table_offset(-1);

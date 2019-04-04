@@ -489,21 +489,29 @@ void ImplementationVisitor::Visit(Builtin* builtin) {
     DCHECK(signature.parameter_types.var_args);
     source_out()
         << "  Node* argc = Parameter(Descriptor::kJSActualArgumentsCount);\n";
-    source_out() << "  CodeStubArguments arguments_impl(this, "
-                    "ChangeInt32ToIntPtr(argc));\n";
     std::string parameter1 = AddParameter(
         1, builtin, &parameters, &parameter_types, &parameter_bindings);
+    source_out()
+        << "  TNode<IntPtrT> arguments_length(ChangeInt32ToIntPtr(argc));\n";
+    source_out() << "  TNode<RawPtrT> arguments_frame = "
+                    "UncheckedCast<RawPtrT>(LoadFramePointer());\n";
+    source_out() << "  BaseBuiltinsFromDSLAssembler::Arguments "
+                    "torque_arguments(GetFrameArguments(arguments_frame, "
+                    "arguments_length));\n";
+    source_out() << "  CodeStubArguments arguments(this, torque_arguments);\n";
 
     source_out() << "  TNode<Object> " << parameter1
-                 << " = arguments_impl.GetReceiver();\n";
-    source_out() << "auto " << CSAGenerator::ARGUMENTS_VARIABLE_STRING
-                 << " = &arguments_impl;\n";
-    source_out() << "USE(arguments);\n";
+                 << " = arguments.GetReceiver();\n";
     source_out() << "USE(" << parameter1 << ");\n";
+    parameters.Push("torque_arguments.frame");
+    parameters.Push("torque_arguments.base");
+    parameters.Push("torque_arguments.length");
+    const Type* arguments_type = TypeOracle::GetArgumentsType();
+    StackRange range = parameter_types.PushMany(LowerType(arguments_type));
     parameter_bindings.Add(
         *signature.arguments_variable,
-        LocalValue{true,
-                   VisitResult(TypeOracle::GetArgumentsType(), "arguments")});
+        LocalValue{true, VisitResult(arguments_type, range)});
+
     first = 2;
   }
 
@@ -568,7 +576,7 @@ const Type* ImplementationVisitor::Visit(
     TypeVector lowered_types = LowerType(*type);
     for (const Type* type : lowered_types) {
       assembler().Emit(PushUninitializedInstruction{TypeOracle::GetTopType(
-          "unitialized variable '" + stmt->name->value + "' of type " +
+          "uninitialized variable '" + stmt->name->value + "' of type " +
               type->ToString() + " originally defined at " +
               PositionAsString(stmt->pos),
           type)});
@@ -1149,7 +1157,7 @@ VisitResult ImplementationVisitor::TemporaryUninitializedStruct(
       range.Extend(
           TemporaryUninitializedStruct(struct_type, reason).stack_range());
     } else {
-      std::string descriptor = "unitialized field '" + f.name_and_type.name +
+      std::string descriptor = "uninitialized field '" + f.name_and_type.name +
                                "' declared at " + PositionAsString(f.pos) +
                                " (" + reason + ")";
       TypeVector lowered_types = LowerType(f.name_and_type.type);
@@ -1242,10 +1250,11 @@ VisitResult ImplementationVisitor::Visit(StatementExpression* expr) {
 }
 
 InitializerResults ImplementationVisitor::VisitInitializerResults(
-    const std::vector<Expression*>& expressions) {
+    const std::vector<NameAndExpression>& initializers) {
   InitializerResults result;
-  for (auto e : expressions) {
-    result.results.push_back(Visit(e));
+  for (const NameAndExpression& initializer : initializers) {
+    result.names.push_back(initializer.name);
+    result.results.push_back(Visit(initializer.expression));
   }
   return result;
 }
@@ -1263,12 +1272,18 @@ size_t ImplementationVisitor::InitializeAggregateHelper(
     }
   }
 
-  for (auto f : aggregate_type->fields()) {
+  for (Field f : aggregate_type->fields()) {
     if (current == initializer_results.results.size()) {
       ReportError("insufficient number of initializers for ",
                   aggregate_type->name());
     }
     VisitResult current_value = initializer_results.results[current];
+    Identifier* fieldname = initializer_results.names[current];
+    if (fieldname->value != f.name_and_type.name) {
+      CurrentSourcePosition::Scope scope(fieldname->pos);
+      ReportError("Expected fieldname \"", f.name_and_type.name,
+                  "\" instead of \"", fieldname->value, "\"");
+    }
     if (aggregate_type->IsClassType()) {
       allocate_result.SetType(aggregate_type);
       GenerateCopy(allocate_result);
@@ -1312,10 +1327,10 @@ VisitResult ImplementationVisitor::Visit(NewExpression* expr) {
   }
 
   InitializerResults initializer_results =
-      VisitInitializerResults(expr->parameters);
+      VisitInitializerResults(expr->initializers);
 
-  // Output the code to generate an unitialized object of the class size in the
-  // GC heap.
+  // Output the code to generate an uninitialized object of the class size in
+  // the GC heap.
   VisitResult allocate_result;
   if (class_type->IsExtern()) {
     if (initializer_results.results.size() == 0) {
@@ -1684,21 +1699,18 @@ VisitResult ImplementationVisitor::GenerateCopy(const VisitResult& to_copy) {
   return to_copy;
 }
 
-VisitResult ImplementationVisitor::Visit(StructExpression* decl) {
+VisitResult ImplementationVisitor::Visit(StructExpression* expr) {
   StackScope stack_scope(this);
-  const Type* raw_type = Declarations::LookupType(
-      QualifiedName(decl->namespace_qualification, decl->name));
+  const Type* raw_type = Declarations::GetType(expr->type);
   if (!raw_type->IsStructType()) {
-    std::stringstream s;
-    s << decl->name << " is not a struct but used like one ";
-    ReportError(s.str());
+    ReportError(*raw_type, " is not a struct but used like one");
   }
 
   InitializerResults initialization_results =
-      ImplementationVisitor::VisitInitializerResults(decl->expressions);
+      ImplementationVisitor::VisitInitializerResults(expr->initializers);
 
   const StructType* struct_type = StructType::cast(raw_type);
-  // Push unitialized 'this'
+  // Push uninitialized 'this'
   VisitResult result = TemporaryUninitializedStruct(
       struct_type, "it's not initialized in the struct " + struct_type->name());
 
@@ -1728,26 +1740,46 @@ LocationReference ImplementationVisitor::GetLocationReference(
   LocationReference reference = GetLocationReference(expr->object);
   if (reference.IsVariableAccess() &&
       reference.variable().type()->IsStructType()) {
-    return LocationReference::VariableAccess(
-        ProjectStructField(reference.variable(), expr->field));
+    const StructType* type = StructType::cast(reference.variable().type());
+    const Field& field = type->LookupField(expr->field->value);
+    if (GlobalContext::collect_language_server_data()) {
+      LanguageServerData::AddDefinition(expr->field->pos, field.pos);
+    }
+    if (field.const_qualified) {
+      VisitResult t_value =
+          ProjectStructField(reference.variable(), expr->field->value);
+      return LocationReference::Temporary(
+          t_value, "for constant field '" + field.name_and_type.name + "'");
+    } else {
+      return LocationReference::VariableAccess(
+          ProjectStructField(reference.variable(), expr->field->value));
+    }
   }
   if (reference.IsTemporary() && reference.temporary().type()->IsStructType()) {
+    if (GlobalContext::collect_language_server_data()) {
+      const StructType* type = StructType::cast(reference.temporary().type());
+      const Field& field = type->LookupField(expr->field->value);
+      LanguageServerData::AddDefinition(expr->field->pos, field.pos);
+    }
     return LocationReference::Temporary(
-        ProjectStructField(reference.temporary(), expr->field),
+        ProjectStructField(reference.temporary(), expr->field->value),
         reference.temporary_description());
   }
   VisitResult object_result = GenerateFetchFromLocation(reference);
   if (const ClassType* class_type =
           ClassType::DynamicCast(object_result.type())) {
-    if (class_type->HasField(expr->field)) {
-      const Field& field = (class_type->LookupField(expr->field));
+    if (class_type->HasField(expr->field->value)) {
+      const Field& field = (class_type->LookupField(expr->field->value));
+      if (GlobalContext::collect_language_server_data()) {
+        LanguageServerData::AddDefinition(expr->field->pos, field.pos);
+      }
       if (field.index) {
         return LocationReference::IndexedFieldAccess(object_result,
-                                                     expr->field);
+                                                     expr->field->value);
       }
     }
   }
-  return LocationReference::FieldAccess(object_result, expr->field);
+  return LocationReference::FieldAccess(object_result, expr->field->value);
 }
 
 LocationReference ImplementationVisitor::GetLocationReference(

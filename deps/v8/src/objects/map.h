@@ -93,7 +93,7 @@ enum class ObjectFields {
   kMaybePointers,
 };
 
-typedef std::vector<Handle<Map>> MapHandles;
+using MapHandles = std::vector<Handle<Map>>;
 
 // All heap objects have a Map that describes their structure.
 //  A Map contains information about:
@@ -240,6 +240,8 @@ class Map : public HeapObject {
   // Bit field.
   //
   DECL_PRIMITIVE_ACCESSORS(bit_field, byte)
+  // Atomic accessors, used for whitelisting legitimate concurrent accesses.
+  DECL_PRIMITIVE_ACCESSORS(relaxed_bit_field, byte)
 
 // Bit positions for |bit_field|.
 #define MAP_BIT_FIELD_FIELDS(V, _)          \
@@ -556,10 +558,10 @@ class Map : public HeapObject {
   DECL_BOOLEAN_ACCESSORS(is_access_check_needed)
 
   // [prototype]: implicit prototype object.
-  DECL_ACCESSORS(prototype, Object)
+  DECL_ACCESSORS(prototype, HeapObject)
   // TODO(jkummerow): make set_prototype private.
   static void SetPrototype(Isolate* isolate, Handle<Map> map,
-                           Handle<Object> prototype,
+                           Handle<HeapObject> prototype,
                            bool enable_prototype_setup_mode = true);
 
   // [constructor]: points back to the function or FunctionTemplateInfo
@@ -819,7 +821,7 @@ class Map : public HeapObject {
   }
 
   static Handle<Map> TransitionToPrototype(Isolate* isolate, Handle<Map> map,
-                                           Handle<Object> prototype);
+                                           Handle<HeapObject> prototype);
 
   static Handle<Map> TransitionToImmutableProto(Isolate* isolate,
                                                 Handle<Map> map);
@@ -892,6 +894,9 @@ class Map : public HeapObject {
   static inline bool CanHaveFastTransitionableElementsKind(
       InstanceType instance_type);
   inline bool CanHaveFastTransitionableElementsKind() const;
+
+  // Whether this is the map of the given native context's global proxy.
+  bool IsMapOfGlobalProxy(Handle<NativeContext> native_context) const;
 
  private:
   // This byte encodes either the instance size without the in-object slack or

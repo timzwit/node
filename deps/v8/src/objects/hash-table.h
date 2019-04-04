@@ -56,7 +56,7 @@ namespace internal {
 template <typename KeyT>
 class BaseShape {
  public:
-  typedef KeyT Key;
+  using Key = KeyT;
   static inline RootIndex GetMapRootIndex();
   static const bool kNeedsHoleCheck = true;
   static Object Unwrap(Object key) { return key; }
@@ -132,13 +132,13 @@ class V8_EXPORT_PRIVATE HashTableBase : public NON_EXPORTED_BASE(FixedArray) {
 template <typename Derived, typename Shape>
 class HashTable : public HashTableBase {
  public:
-  typedef Shape ShapeT;
-  typedef typename Shape::Key Key;
+  using ShapeT = Shape;
+  using Key = typename Shape::Key;
 
   // Returns a new HashTable object.
   V8_WARN_UNUSED_RESULT static Handle<Derived> New(
       Isolate* isolate, int at_least_space_for,
-      PretenureFlag pretenure = NOT_TENURED,
+      AllocationType allocation = AllocationType::kYoung,
       MinimumCapacity capacity_option = USE_DEFAULT_MINIMUM_CAPACITY);
 
   // Garbage collection support.
@@ -183,10 +183,20 @@ class HashTable : public HashTableBase {
     return (entry * kEntrySize) + kElementsStartIndex;
   }
 
+  // Returns the index for an entry (of the key)
+  static constexpr inline int IndexToEntry(int index) {
+    return (index - kElementsStartIndex) / kEntrySize;
+  }
+
+  // Returns the index for a slot address in the object.
+  static constexpr inline int SlotToIndex(Address object, Address slot) {
+    return static_cast<int>((slot - object - kHeaderSize) / kTaggedSize);
+  }
+
   // Ensure enough space for n additional elements.
   V8_WARN_UNUSED_RESULT static Handle<Derived> EnsureCapacity(
       Isolate* isolate, Handle<Derived> table, int n,
-      PretenureFlag pretenure = NOT_TENURED);
+      AllocationType allocation = AllocationType::kYoung);
 
   // Returns true if this table has sufficient capacity for adding n elements.
   bool HasSufficientCapacityToAdd(int number_of_additional_elements);
@@ -195,7 +205,7 @@ class HashTable : public HashTableBase {
   friend class ObjectHashTable;
 
   V8_WARN_UNUSED_RESULT static Handle<Derived> NewInternal(
-      Isolate* isolate, int capacity, PretenureFlag pretenure);
+      Isolate* isolate, int capacity, AllocationType allocation);
 
   // Find the entry at which to insert element with the given key that
   // has the given hash value.
@@ -204,6 +214,9 @@ class HashTable : public HashTableBase {
   // Attempt to shrink hash table after removal of key.
   V8_WARN_UNUSED_RESULT static Handle<Derived> Shrink(
       Isolate* isolate, Handle<Derived> table, int additionalCapacity = 0);
+
+  inline void set_key(int index, Object value);
+  inline void set_key(int index, Object value, WriteBarrierMode mode);
 
  private:
   // Ensure that kMaxRegularCapacity yields a non-large object dictionary.
@@ -342,10 +355,15 @@ class EphemeronHashTable
  public:
   DECL_CAST(EphemeronHashTable)
   DECL_PRINTER(EphemeronHashTable)
+  class BodyDescriptor;
 
  protected:
   friend class MarkCompactCollector;
   friend class ScavengerCollector;
+  friend class HashTable<EphemeronHashTable, EphemeronHashTableShape>;
+  friend class ObjectHashTableBase<EphemeronHashTable, EphemeronHashTableShape>;
+  inline void set_key(int index, Object value);
+  inline void set_key(int index, Object value, WriteBarrierMode mode);
 
   OBJECT_CONSTRUCTORS(
       EphemeronHashTable,

@@ -9,6 +9,7 @@
 #include "src/accessors.h"
 #include "src/compiler/compilation-dependencies.h"
 #include "src/compiler/type-cache.h"
+#include "src/counters.h"
 #include "src/field-index-inl.h"
 #include "src/field-type.h"
 #include "src/ic/call-optimization.h"
@@ -249,8 +250,9 @@ bool AccessInfoFactory::ComputeElementAccessInfo(
     Handle<Map> map, AccessMode access_mode,
     ElementAccessInfo* access_info) const {
   // Check if it is safe to inline element access for the {map}.
-  if (!CanInlineElementAccess(map)) return false;
-  ElementsKind const elements_kind = map->elements_kind();
+  MapRef map_ref(broker(), map);
+  if (!CanInlineElementAccess(map_ref)) return false;
+  ElementsKind const elements_kind = map_ref.elements_kind();
   *access_info = ElementAccessInfo(MapHandles{map}, elements_kind);
   return true;
 }
@@ -258,34 +260,19 @@ bool AccessInfoFactory::ComputeElementAccessInfo(
 bool AccessInfoFactory::ComputeElementAccessInfos(
     FeedbackNexus nexus, MapHandles const& maps, AccessMode access_mode,
     ZoneVector<ElementAccessInfo>* access_infos) const {
-  ProcessedFeedback processed(broker()->zone());
-  ProcessFeedbackMapsForElementAccess(isolate(), maps, &processed);
-
+  ElementAccessFeedback const* processed;
   if (FLAG_concurrent_inlining) {
-    if (broker()->HasFeedback(nexus)) {
-      // We have already processed the feedback for this nexus during
-      // serialization. Use that data instead of the data computed above.
-      ProcessedFeedback const& preprocessed =
-          broker()->GetOrCreateFeedback(nexus);
-      TRACE_BROKER(broker(),
-                   "ComputeElementAccessInfos: using preprocessed feedback "
-                       << "(slot " << nexus.slot() << " of "
-                       << Brief(*nexus.vector_handle()) << "; "
-                       << preprocessed.receiver_maps.size() << "/"
-                       << preprocessed.transitions.size() << " vs "
-                       << processed.receiver_maps.size() << "/"
-                       << processed.transitions.size() << ").\n");
-      processed.receiver_maps = preprocessed.receiver_maps;
-      processed.transitions = preprocessed.transitions;
-    } else {
-      TRACE_BROKER(broker(),
-                   "ComputeElementAccessInfos: missing preprocessed feedback "
-                       << "(slot " << nexus.slot() << " of "
-                       << Brief(*nexus.vector_handle()) << ").\n");
-    }
+    TRACE_BROKER(broker(),
+                 "ComputeElementAccessInfos: using preprocessed feedback "
+                     << "(slot " << nexus.slot() << " of "
+                     << "feedback vector handle "
+                     << nexus.vector_handle().address() << ").\n");
+    processed = broker()->GetElementAccessFeedback(FeedbackSource(nexus));
+  } else {
+    processed = broker()->ProcessFeedbackMapsForElementAccess(maps);
   }
 
-  if (processed.receiver_maps.empty()) return false;
+  if (processed == nullptr) return false;
 
   if (access_mode == AccessMode::kLoad || access_mode == AccessMode::kHas) {
     // For polymorphic loads of similar elements kinds (i.e. all tagged or all
@@ -293,13 +280,13 @@ bool AccessInfoFactory::ComputeElementAccessInfos(
     // much faster than transitioning the elements to the worst case, trading a
     // TransitionElementsKind for a CheckMaps, avoiding mutation of the array.
     ElementAccessInfo access_info;
-    if (ConsolidateElementLoad(processed, &access_info)) {
+    if (ConsolidateElementLoad(*processed, &access_info)) {
       access_infos->push_back(access_info);
       return true;
     }
   }
 
-  for (Handle<Map> receiver_map : processed.receiver_maps) {
+  for (Handle<Map> receiver_map : processed->receiver_maps) {
     // Compute the element access information.
     ElementAccessInfo access_info;
     if (!ComputeElementAccessInfo(receiver_map, access_mode, &access_info)) {
@@ -307,8 +294,8 @@ bool AccessInfoFactory::ComputeElementAccessInfos(
     }
 
     // Collect the possible transitions for the {receiver_map}.
-    for (auto transition : processed.transitions) {
-      if (transition.second.is_identical_to(receiver_map)) {
+    for (auto transition : processed->transitions) {
+      if (transition.second.equals(receiver_map)) {
         access_info.AddTransitionSource(transition.first);
       }
     }
@@ -327,6 +314,14 @@ bool AccessInfoFactory::ComputeDataFieldAccessInfo(
   PropertyDetails const details = descriptors->GetDetails(number);
   int index = descriptors->GetFieldIndex(number);
   Representation details_representation = details.representation();
+  if (details_representation.IsNone()) {
+    // The ICs collect feedback in PREMONOMORPHIC state already,
+    // but at this point the {receiver_map} might still contain
+    // fields for which the representation has not yet been
+    // determined by the runtime. So we need to catch this case
+    // here and fall back to use the regular IC logic instead.
+    return false;
+  }
   FieldIndex field_index =
       FieldIndex::ForPropertyIndex(*map, index, details_representation);
   Type field_type = Type::NonInternal();
@@ -417,7 +412,7 @@ bool AccessInfoFactory::ComputeAccessorDescriptorAccessInfo(
     DCHECK_IMPLIES(lookup == CallOptimization::kHolderIsReceiver,
                    holder.is_null());
     DCHECK_IMPLIES(lookup == CallOptimization::kHolderFound, !holder.is_null());
-    if (V8_UNLIKELY(FLAG_runtime_stats)) return false;
+    if (V8_UNLIKELY(TracingFlags::is_runtime_stats_enabled())) return false;
   }
   if (access_mode == AccessMode::kLoad) {
     Handle<Name> cached_property_name;
@@ -618,37 +613,24 @@ Maybe<ElementsKind> GeneralizeElementsKind(ElementsKind this_kind,
 }  // namespace
 
 bool AccessInfoFactory::ConsolidateElementLoad(
-    ProcessedFeedback const& processed, ElementAccessInfo* access_info) const {
-  CHECK(!processed.receiver_maps.empty());
-
-  // We want to look at each map but the maps are split across
-  // {processed.receiver_maps} and {processed.transitions}.
-
-  InstanceType instance_type = processed.receiver_maps.front()->instance_type();
-  ElementsKind elements_kind = processed.receiver_maps.front()->elements_kind();
-  auto processMap = [&](Handle<Map> map) {
-    if (!CanInlineElementAccess(map) || map->instance_type() != instance_type) {
+    ElementAccessFeedback const& processed,
+    ElementAccessInfo* access_info) const {
+  ElementAccessFeedback::MapIterator it = processed.all_maps(broker());
+  MapRef first_map = it.current();
+  InstanceType instance_type = first_map.instance_type();
+  ElementsKind elements_kind = first_map.elements_kind();
+  MapHandles maps;
+  for (; !it.done(); it.advance()) {
+    MapRef map = it.current();
+    if (map.instance_type() != instance_type || !CanInlineElementAccess(map)) {
       return false;
     }
-    if (!GeneralizeElementsKind(elements_kind, map->elements_kind())
+    if (!GeneralizeElementsKind(elements_kind, map.elements_kind())
              .To(&elements_kind)) {
       return false;
     }
-    return true;
-  };
-
-  for (Handle<Map> map : processed.receiver_maps) {
-    if (!processMap(map)) return false;
+    maps.push_back(map.object());
   }
-
-  MapHandles maps(processed.receiver_maps.begin(),
-                  processed.receiver_maps.end());
-  for (auto& pair : processed.transitions) {
-    if (!processMap(pair.first) || !processMap(pair.second)) return false;
-    maps.push_back(pair.first);
-    maps.push_back(pair.second);
-  }
-  // {maps} may now contain duplicate entries, but that shouldn't matter.
 
   *access_info = ElementAccessInfo(maps, elements_kind);
   return true;

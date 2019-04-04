@@ -13,7 +13,6 @@
 #include "src/globals.h"
 #include "src/handles.h"
 #include "src/objects.h"
-#include "src/objects/builtin-function-id.h"
 #include "src/objects/instance-type.h"
 #include "src/ostreams.h"
 #include "src/zone/zone-containers.h"
@@ -22,6 +21,7 @@ namespace v8 {
 namespace internal {
 
 class BytecodeArray;
+class VectorSlotPair;
 class FixedDoubleArray;
 class HeapNumber;
 class InternalizedString;
@@ -96,7 +96,7 @@ class PerIsolateCompilerCache;
 HEAP_BROKER_OBJECT_LIST(FORWARD_DECL)
 #undef FORWARD_DECL
 
-class ObjectRef {
+class V8_EXPORT_PRIVATE ObjectRef {
  public:
   ObjectRef(JSHeapBroker* broker, Handle<Object> object);
   ObjectRef(JSHeapBroker* broker, ObjectData* data)
@@ -132,6 +132,8 @@ class ObjectRef {
   ObjectData* data_;  // Should be used only by object() getters.
 
  private:
+  friend class JSGlobalProxyRef;
+  friend class JSGlobalProxyData;
   JSHeapBroker* broker_;
 };
 
@@ -146,7 +148,7 @@ class HeapObjectType {
  public:
   enum Flag : uint8_t { kUndetectable = 1 << 0, kCallable = 1 << 1 };
 
-  typedef base::Flags<Flag> Flags;
+  using Flags = base::Flags<Flag>;
 
   HeapObjectType(InstanceType instance_type, Flags flags,
                  OddballType oddball_type)
@@ -187,6 +189,8 @@ class PropertyCellRef : public HeapObjectRef {
   Handle<PropertyCell> object() const;
 
   PropertyDetails property_details() const;
+
+  void Serialize();
   ObjectRef value() const;
 };
 
@@ -228,7 +232,7 @@ class JSBoundFunctionRef : public JSObjectRef {
   FixedArrayRef bound_arguments() const;
 };
 
-class JSFunctionRef : public JSObjectRef {
+class V8_EXPORT_PRIVATE JSFunctionRef : public JSObjectRef {
  public:
   using JSObjectRef::JSObjectRef;
   Handle<JSFunction> object() const;
@@ -239,7 +243,7 @@ class JSFunctionRef : public JSObjectRef {
   bool PrototypeRequiresRuntimeLookup() const;
 
   void Serialize();
-  bool IsSerializedForCompilation() const;
+  bool serialized() const;
 
   // The following are available only after calling Serialize().
   ObjectRef prototype() const;
@@ -249,6 +253,8 @@ class JSFunctionRef : public JSObjectRef {
   SharedFunctionInfoRef shared() const;
   FeedbackVectorRef feedback_vector() const;
   int InitialMapInstanceSizeWithMinSlack() const;
+
+  bool IsSerializedForCompilation() const;
 };
 
 class JSRegExpRef : public JSObjectRef {
@@ -284,8 +290,10 @@ class ContextRef : public HeapObjectRef {
   using HeapObjectRef::HeapObjectRef;
   Handle<Context> object() const;
 
-  void Serialize();
+  void SerializeContextChain();
   ContextRef previous() const;
+
+  void SerializeSlot(int index);
   ObjectRef get(int index) const;
 };
 
@@ -394,7 +402,7 @@ class AllocationSiteRef : public HeapObjectRef {
   Handle<AllocationSite> object() const;
 
   bool PointsToLiteral() const;
-  PretenureFlag GetPretenureMode() const;
+  AllocationType GetAllocationType() const;
   ObjectRef nested_site() const;
 
   // {IsFastLiteral} determines whether the given array or object literal
@@ -410,7 +418,7 @@ class AllocationSiteRef : public HeapObjectRef {
   bool CanInlineCall() const;
 };
 
-class MapRef : public HeapObjectRef {
+class V8_EXPORT_PRIVATE MapRef : public HeapObjectRef {
  public:
   using HeapObjectRef::HeapObjectRef;
   Handle<Map> object() const;
@@ -439,22 +447,30 @@ class MapRef : public HeapObjectRef {
   bool IsPrimitiveMap() const;
   bool is_undetectable() const;
   bool is_callable() const;
+  bool has_indexed_interceptor() const;
   bool has_hidden_prototype() const;
+  bool is_migration_target() const;
   bool supports_fast_array_iteration() const;
   bool supports_fast_array_resize() const;
+  bool IsMapOfCurrentGlobalProxy() const;
 
 #define DEF_TESTER(Type, ...) bool Is##Type##Map() const;
   INSTANCE_TYPE_CHECKERS(DEF_TESTER)
 #undef DEF_TESTER
 
   ObjectRef GetConstructor() const;
+  OddballType oddball_type() const;
+  base::Optional<MapRef> AsElementsKind(ElementsKind kind) const;
 
   void SerializePrototype();
-  ObjectRef prototype() const;
+  bool serialized_prototype() const;
+  HeapObjectRef prototype() const;
 
-  OddballType oddball_type() const;
+  void SerializeForElementLoad();
 
-  base::Optional<MapRef> AsElementsKind(ElementsKind kind) const;
+  void SerializeForElementStore();
+  bool HasOnlyStablePrototypesWithFastElements(
+      ZoneVector<MapRef>* prototype_maps);
 
   // Concerning the underlying instance_descriptors:
   void SerializeOwnDescriptors();
@@ -515,28 +531,28 @@ class ScopeInfoRef : public HeapObjectRef {
   int ContextLength() const;
 };
 
-#define BROKER_SFI_FIELDS(V)                \
-  V(int, internal_formal_parameter_count)   \
-  V(bool, has_duplicate_parameters)         \
-  V(int, function_map_index)                \
-  V(FunctionKind, kind)                     \
-  V(LanguageMode, language_mode)            \
-  V(bool, native)                           \
-  V(bool, HasBreakInfo)                     \
-  V(bool, HasBuiltinFunctionId)             \
-  V(bool, HasBuiltinId)                     \
-  V(BuiltinFunctionId, builtin_function_id) \
-  V(bool, construct_as_builtin)             \
-  V(bool, HasBytecodeArray)                 \
-  V(bool, is_safe_to_skip_arguments_adaptor)
+#define BROKER_SFI_FIELDS(V)                 \
+  V(int, internal_formal_parameter_count)    \
+  V(bool, has_duplicate_parameters)          \
+  V(int, function_map_index)                 \
+  V(FunctionKind, kind)                      \
+  V(LanguageMode, language_mode)             \
+  V(bool, native)                            \
+  V(bool, HasBreakInfo)                      \
+  V(bool, HasBuiltinId)                      \
+  V(bool, construct_as_builtin)              \
+  V(bool, HasBytecodeArray)                  \
+  V(bool, is_safe_to_skip_arguments_adaptor) \
+  V(bool, IsInlineable)
 
-class SharedFunctionInfoRef : public HeapObjectRef {
+class V8_EXPORT_PRIVATE SharedFunctionInfoRef : public HeapObjectRef {
  public:
   using HeapObjectRef::HeapObjectRef;
   Handle<SharedFunctionInfo> object() const;
 
   int builtin_id() const;
   BytecodeArrayRef GetBytecodeArray() const;
+
 #define DECL_ACCESSOR(type, name) type name() const;
   BROKER_SFI_FIELDS(DECL_ACCESSOR)
 #undef DECL_ACCESSOR
@@ -573,6 +589,7 @@ class JSTypedArrayRef : public JSObjectRef {
   void* elements_external_pointer() const;
 
   void Serialize();
+  bool serialized() const;
 
   HeapObjectRef buffer() const;
 };
@@ -599,6 +616,16 @@ class JSGlobalProxyRef : public JSObjectRef {
  public:
   using JSObjectRef::JSObjectRef;
   Handle<JSGlobalProxy> object() const;
+
+  // If {serialize} is false:
+  //   If the property is known to exist as a property cell (on the global
+  //   object), return that property cell. Otherwise (not known to exist as a
+  //   property cell or known not to exist as a property cell) return nothing.
+  // If {serialize} is true:
+  //   Like above but potentially access the heap and serialize the necessary
+  //   information.
+  base::Optional<PropertyCellRef> GetPropertyCell(NameRef const& name,
+                                                  bool serialize = false) const;
 };
 
 class CodeRef : public HeapObjectRef {
@@ -616,12 +643,90 @@ class InternalizedStringRef : public StringRef {
   static const uint32_t kNotAnArrayIndex = -1;  // 2^32-1 is not a valid index.
 };
 
-struct ProcessedFeedback {
+class ProcessedFeedback : public ZoneObject {
+ public:
+  enum Kind { kElementAccess, kGlobalAccess };
+  Kind kind() const { return kind_; }
+
+ protected:
+  explicit ProcessedFeedback(Kind kind) : kind_(kind) {}
+
+ private:
+  Kind const kind_;
+};
+
+class GlobalAccessFeedback : public ProcessedFeedback {
+ public:
+  explicit GlobalAccessFeedback(PropertyCellRef cell);
+  GlobalAccessFeedback(ContextRef script_context, int slot_index,
+                       bool immutable);
+
+  bool IsPropertyCell() const;
+  PropertyCellRef property_cell() const;
+
+  bool IsScriptContextSlot() const { return !IsPropertyCell(); }
+  ContextRef script_context() const;
+  int slot_index() const;
+  bool immutable() const;
+
+  base::Optional<ObjectRef> GetConstantHint() const;
+
+ private:
+  ObjectRef const cell_or_context_;
+  int const index_and_immutable_;
+};
+
+class ElementAccessFeedback : public ProcessedFeedback {
+ public:
+  explicit ElementAccessFeedback(Zone* zone);
+
+  // No transition sources appear in {receiver_maps}.
+  // All transition targets appear in {receiver_maps}.
   ZoneVector<Handle<Map>> receiver_maps;
   ZoneVector<std::pair<Handle<Map>, Handle<Map>>> transitions;
 
-  explicit ProcessedFeedback(Zone* zone)
-      : receiver_maps(zone), transitions(zone) {}
+  class MapIterator {
+   public:
+    bool done() const;
+    void advance();
+    MapRef current() const;
+
+   private:
+    friend class ElementAccessFeedback;
+
+    explicit MapIterator(ElementAccessFeedback const& processed,
+                         JSHeapBroker* broker);
+
+    ElementAccessFeedback const& processed_;
+    JSHeapBroker* const broker_;
+    size_t index_ = 0;
+  };
+
+  // Iterator over all maps: first {receiver_maps}, then transition sources.
+  MapIterator all_maps(JSHeapBroker* broker) const;
+};
+
+struct FeedbackSource {
+  FeedbackSource(Handle<FeedbackVector> vector_, FeedbackSlot slot_)
+      : vector(vector_), slot(slot_) {}
+  explicit FeedbackSource(FeedbackNexus const& nexus);
+  explicit FeedbackSource(VectorSlotPair const& pair);
+
+  Handle<FeedbackVector> const vector;
+  FeedbackSlot const slot;
+
+  struct Hash {
+    size_t operator()(FeedbackSource const& source) const {
+      return base::hash_combine(source.vector.address(), source.slot);
+    }
+  };
+
+  struct Equal {
+    bool operator()(FeedbackSource const& lhs,
+                    FeedbackSource const& rhs) const {
+      return lhs.vector.equals(rhs.vector) && lhs.slot == rhs.slot;
+    }
+  };
 };
 
 class V8_EXPORT_PRIVATE JSHeapBroker : public NON_EXPORTED_BASE(ZoneObject) {
@@ -654,8 +759,24 @@ class V8_EXPORT_PRIVATE JSHeapBroker : public NON_EXPORTED_BASE(ZoneObject) {
   // %ObjectPrototype%.
   bool IsArrayOrObjectPrototype(const JSObjectRef& object) const;
 
-  bool HasFeedback(FeedbackNexus const& nexus) const;
-  ProcessedFeedback& GetOrCreateFeedback(FeedbackNexus const& nexus);
+  bool HasFeedback(FeedbackSource const& source) const;
+  // The processed {feedback} can be {nullptr}, indicating that the original
+  // feedback didn't contain information relevant for Turbofan.
+  void SetFeedback(FeedbackSource const& source,
+                   ProcessedFeedback const* feedback);
+  ProcessedFeedback const* GetFeedback(FeedbackSource const& source) const;
+
+  // Convenience wrappers around GetFeedback.
+  ElementAccessFeedback const* GetElementAccessFeedback(
+      FeedbackSource const& source) const;
+  GlobalAccessFeedback const* GetGlobalAccessFeedback(
+      FeedbackSource const& source) const;
+
+  // TODO(neis): Move these into serializer when we're always in the background.
+  ElementAccessFeedback const* ProcessFeedbackMapsForElementAccess(
+      MapHandles const& maps);
+  GlobalAccessFeedback const* ProcessFeedbackForGlobalAccess(
+      FeedbackSource const& source);
 
   std::ostream& Trace();
   void IncrementTracingIndentation();
@@ -669,18 +790,6 @@ class V8_EXPORT_PRIVATE JSHeapBroker : public NON_EXPORTED_BASE(ZoneObject) {
   void SerializeShareableObjects();
   void CollectArrayAndObjectPrototypes();
 
-  struct FeedbackNexusHash {
-    size_t operator()(FeedbackNexus const& nexus) const {
-      return base::hash_combine(nexus.vector_handle().location(), nexus.slot());
-    }
-  };
-  struct FeedbackNexusEqual {
-    bool operator()(FeedbackNexus const& lhs, FeedbackNexus const& rhs) const {
-      return lhs.vector_handle().equals(rhs.vector_handle()) &&
-             lhs.slot() == rhs.slot();
-    }
-  };
-
   Isolate* const isolate_;
   Zone* const broker_zone_;
   Zone* current_zone_;
@@ -693,8 +802,8 @@ class V8_EXPORT_PRIVATE JSHeapBroker : public NON_EXPORTED_BASE(ZoneObject) {
   StdoutStream trace_out_;
   unsigned trace_indentation_ = 0;
   PerIsolateCompilerCache* compiler_cache_;
-  ZoneUnorderedMap<FeedbackNexus, ProcessedFeedback, FeedbackNexusHash,
-                   FeedbackNexusEqual>
+  ZoneUnorderedMap<FeedbackSource, ProcessedFeedback const*,
+                   FeedbackSource::Hash, FeedbackSource::Equal>
       feedback_;
 
   static const size_t kMinimalRefsBucketCount = 8;     // must be power of 2
@@ -714,10 +823,7 @@ Reduction NoChangeBecauseOfMissingData(JSHeapBroker* broker,
 
 // Miscellaneous definitions that should be moved elsewhere once concurrent
 // compilation is finished.
-bool CanInlineElementAccess(Handle<Map> map);
-void ProcessFeedbackMapsForElementAccess(Isolate* isolate,
-                                         MapHandles const& maps,
-                                         ProcessedFeedback* processed);
+bool CanInlineElementAccess(MapRef const& map);
 
 #define TRACE_BROKER(broker, x)                               \
   do {                                                        \

@@ -4816,19 +4816,18 @@ void MacroAssembler::EnterExitFrame(bool save_doubles, int stack_space,
   // [fp + 0 (==kCallerFPOffset)] - saved old fp
   // [fp - 1 StackFrame::EXIT Smi
   // [fp - 2 (==kSPOffset)] - sp of the called function
-  // [fp - 3 (==kCodeOffset)] - CodeObject
   // fp - (2 + stack_space + alignment) == sp == [fp - kSPOffset] - top of the
   //   new stack (will contain saved ra)
 
-  // Save registers and reserve room for saved entry sp and code object.
+  // Save registers and reserve room for saved entry sp.
   addiu(sp, sp, -2 * kPointerSize - ExitFrameConstants::kFixedFrameSizeFromFp);
-  sw(ra, MemOperand(sp, 4 * kPointerSize));
-  sw(fp, MemOperand(sp, 3 * kPointerSize));
+  sw(ra, MemOperand(sp, 3 * kPointerSize));
+  sw(fp, MemOperand(sp, 2 * kPointerSize));
   {
     UseScratchRegisterScope temps(this);
     Register scratch = temps.Acquire();
     li(scratch, Operand(StackFrame::TypeToMarker(frame_type)));
-    sw(scratch, MemOperand(sp, 2 * kPointerSize));
+    sw(scratch, MemOperand(sp, 1 * kPointerSize));
   }
   // Set up new frame pointer.
   addiu(fp, sp, ExitFrameConstants::kFixedFrameSizeFromFp);
@@ -4836,10 +4835,6 @@ void MacroAssembler::EnterExitFrame(bool save_doubles, int stack_space,
   if (emit_debug_code()) {
     sw(zero_reg, MemOperand(fp, ExitFrameConstants::kSPOffset));
   }
-
-  // Accessed from ExitFrame::code_slot.
-  li(t8, CodeObject(), CONSTANT_SIZE);
-  sw(t8, MemOperand(fp, ExitFrameConstants::kCodeOffset));
 
   // Save the frame pointer and the context in top.
   li(t8,

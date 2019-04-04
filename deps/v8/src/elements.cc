@@ -166,10 +166,8 @@ void CopyObjectToObjectElements(Isolate* isolate, FixedArrayBase from_base,
       (IsObjectElementsKind(from_kind) && IsObjectElementsKind(to_kind))
           ? UPDATE_WRITE_BARRIER
           : SKIP_WRITE_BARRIER;
-  for (int i = 0; i < copy_size; i++) {
-    Object value = from->get(from_start + i);
-    to->set(to_start + i, value, write_barrier_mode);
-  }
+  to->CopyElements(isolate->heap(), to_start, from, from_start, copy_size,
+                   write_barrier_mode);
 }
 
 static void CopyDictionaryToObjectElements(
@@ -2975,7 +2973,13 @@ class TypedElementsAccessor
     DisallowHeapAllocation no_gc;
     BackingStore elements = BackingStore::cast(receiver->elements());
     ctype* data = static_cast<ctype*>(elements->DataPtr());
-    std::fill(data + start, data + end, value);
+    if (COMPRESS_POINTERS_BOOL && alignof(ctype) > kTaggedSize) {
+      // TODO(ishell, v8:8875): See UnalignedSlot<T> for details.
+      std::fill(UnalignedSlot<ctype>(data + start),
+                UnalignedSlot<ctype>(data + end), value);
+    } else {
+      std::fill(data + start, data + end, value);
+    }
     return *array;
   }
 
@@ -3148,7 +3152,13 @@ class TypedElementsAccessor
     if (len == 0) return;
 
     ctype* data = static_cast<ctype*>(elements->DataPtr());
-    std::reverse(data, data + len);
+    if (COMPRESS_POINTERS_BOOL && alignof(ctype) > kTaggedSize) {
+      // TODO(ishell, v8:8875): See UnalignedSlot<T> for details.
+      std::reverse(UnalignedSlot<ctype>(data),
+                   UnalignedSlot<ctype>(data + len));
+    } else {
+      std::reverse(data, data + len);
+    }
   }
 
   static Handle<FixedArray> CreateListFromArrayLikeImpl(Isolate* isolate,

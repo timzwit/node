@@ -169,12 +169,17 @@ class V8_EXPORT_PRIVATE WasmEngine {
   // is determined with a heuristic based on the total size of wasm
   // code. The native module may later request more memory.
   // TODO(titzer): isolate is only required here for CompilationState.
-  std::unique_ptr<NativeModule> NewNativeModule(
+  std::shared_ptr<NativeModule> NewNativeModule(
       Isolate* isolate, const WasmFeatures& enabled_features,
       size_t code_size_estimate, bool can_request_more,
       std::shared_ptr<const WasmModule> module);
 
   void FreeNativeModule(NativeModule*);
+
+  // Sample the code size of the given {NativeModule} in all isolates that have
+  // access to it. Call this after top-tier compilation finished.
+  // This will spawn foreground tasks that do *not* keep the NativeModule alive.
+  void SampleTopTierCodeSizeInAllIsolates(const std::shared_ptr<NativeModule>&);
 
   // Call on process start and exit.
   static void InitializeOncePerProcess();

@@ -23,6 +23,7 @@
 #include "src/objects/heap-number.h"
 #include "src/objects/js-array-buffer.h"
 #include "src/objects/js-collection.h"
+#include "src/objects/js-proxy.h"
 #include "src/objects/map.h"
 #include "src/objects/maybe-object.h"
 #include "src/objects/oddball.h"
@@ -362,9 +363,9 @@ class RawMachineAssembler;
 class RawMachineLabel;
 class SourcePositionTable;
 
-typedef ZoneVector<CodeAssemblerVariable*> CodeAssemblerVariableList;
+using CodeAssemblerVariableList = ZoneVector<CodeAssemblerVariable*>;
 
-typedef std::function<void()> CodeAssemblerCallback;
+using CodeAssemblerCallback = std::function<void()>;
 
 template <class T, class U>
 struct is_subtype {
@@ -942,6 +943,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   // Store value to raw memory location.
   Node* Store(Node* base, Node* value);
   Node* Store(Node* base, Node* offset, Node* value);
+  Node* StoreEphemeronKey(Node* base, Node* offset, Node* value);
   Node* StoreNoWriteBarrier(MachineRepresentation rep, Node* base, Node* value);
   Node* StoreNoWriteBarrier(MachineRepresentation rep, Node* base, Node* offset,
                             Node* value);
@@ -953,7 +955,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
 
   // Optimized memory operations that map to Turbofan simplified nodes.
   TNode<HeapObject> OptimizedAllocate(TNode<IntPtrT> size,
-                                      PretenureFlag pretenure);
+                                      AllocationType allocation);
   void OptimizedStoreField(MachineRepresentation rep, TNode<HeapObject> object,
                            int offset, Node* value,
                            WriteBarrierKind write_barrier);
@@ -1463,7 +1465,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   DISALLOW_COPY_AND_ASSIGN(CodeAssembler);
 };
 
-class CodeAssemblerVariable {
+class V8_EXPORT_PRIVATE CodeAssemblerVariable {
  public:
   explicit CodeAssemblerVariable(CodeAssembler* assembler,
                                  MachineRepresentation rep);
@@ -1533,7 +1535,7 @@ class TypedCodeAssemblerVariable : public CodeAssemblerVariable {
   using CodeAssemblerVariable::Bind;
 };
 
-class CodeAssemblerLabel {
+class V8_EXPORT_PRIVATE CodeAssemblerLabel {
  public:
   enum Type { kDeferred, kNonDeferred };
 
@@ -1649,8 +1651,8 @@ class CodeAssemblerParameterizedLabel
   }
 };
 
-typedef CodeAssemblerParameterizedLabel<Object>
-    CodeAssemblerExceptionHandlerLabel;
+using CodeAssemblerExceptionHandlerLabel =
+    CodeAssemblerParameterizedLabel<Object>;
 
 class V8_EXPORT_PRIVATE CodeAssemblerState {
  public:
@@ -1705,7 +1707,7 @@ class V8_EXPORT_PRIVATE CodeAssemblerState {
   CodeAssemblerCallback call_prologue_;
   CodeAssemblerCallback call_epilogue_;
   std::vector<CodeAssemblerExceptionHandlerLabel*> exception_handler_labels_;
-  typedef uint32_t VariableId;
+  using VariableId = uint32_t;
   VariableId next_variable_id_ = 0;
 
   VariableId NextVariableId() { return next_variable_id_++; }
@@ -1713,7 +1715,7 @@ class V8_EXPORT_PRIVATE CodeAssemblerState {
   DISALLOW_COPY_AND_ASSIGN(CodeAssemblerState);
 };
 
-class CodeAssemblerScopedExceptionHandler {
+class V8_EXPORT_PRIVATE CodeAssemblerScopedExceptionHandler {
  public:
   CodeAssemblerScopedExceptionHandler(
       CodeAssembler* assembler, CodeAssemblerExceptionHandlerLabel* label);
@@ -1737,9 +1739,9 @@ class CodeAssemblerScopedExceptionHandler {
 }  // namespace compiler
 
 #if defined(V8_HOST_ARCH_32_BIT)
-typedef Smi BInt;
+using BInt = Smi;
 #elif defined(V8_HOST_ARCH_64_BIT)
-typedef IntPtrT BInt;
+using BInt = IntPtrT;
 #else
 #error Unknown architecture.
 #endif

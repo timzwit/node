@@ -196,8 +196,9 @@ class OrderedHashTable : public FixedArray {
 
  protected:
   // Returns an OrderedHashTable with a capacity of at least |capacity|.
-  static Handle<Derived> Allocate(Isolate* isolate, int capacity,
-                                  PretenureFlag pretenure = NOT_TENURED);
+  static Handle<Derived> Allocate(
+      Isolate* isolate, int capacity,
+      AllocationType allocation = AllocationType::kYoung);
   static Handle<Derived> Rehash(Isolate* isolate, Handle<Derived> table,
                                 int new_capacity);
 
@@ -241,8 +242,9 @@ class OrderedHashSet : public OrderedHashTable<OrderedHashSet, 1> {
   static Handle<OrderedHashSet> Rehash(Isolate* isolate,
                                        Handle<OrderedHashSet> table,
                                        int new_capacity);
-  static Handle<OrderedHashSet> Allocate(Isolate* isolate, int capacity,
-                                         PretenureFlag pretenure = NOT_TENURED);
+  static Handle<OrderedHashSet> Allocate(
+      Isolate* isolate, int capacity,
+      AllocationType allocation = AllocationType::kYoung);
   static HeapObject GetEmpty(ReadOnlyRoots ro_roots);
   static inline RootIndex GetMapRootIndex();
   static inline bool Is(Handle<HeapObject> table);
@@ -261,8 +263,9 @@ class OrderedHashMap : public OrderedHashTable<OrderedHashMap, 2> {
                                     Handle<OrderedHashMap> table,
                                     Handle<Object> key, Handle<Object> value);
 
-  static Handle<OrderedHashMap> Allocate(Isolate* isolate, int capacity,
-                                         PretenureFlag pretenure = NOT_TENURED);
+  static Handle<OrderedHashMap> Allocate(
+      Isolate* isolate, int capacity,
+      AllocationType allocation = AllocationType::kYoung);
   static Handle<OrderedHashMap> Rehash(Isolate* isolate,
                                        Handle<OrderedHashMap> table,
                                        int new_capacity);
@@ -333,16 +336,17 @@ template <class Derived>
 class SmallOrderedHashTable : public HeapObject {
  public:
   // Offset points to a relative location in the table
-  typedef int Offset;
+  using Offset = int;
 
   // ByteIndex points to a index in the table that needs to be
   // converted to an Offset.
-  typedef int ByteIndex;
+  using ByteIndex = int;
 
   void Initialize(Isolate* isolate, int capacity);
 
-  static Handle<Derived> Allocate(Isolate* isolate, int capacity,
-                                  PretenureFlag pretenure = NOT_TENURED);
+  static Handle<Derived> Allocate(
+      Isolate* isolate, int capacity,
+      AllocationType allocation = AllocationType::kYoung);
 
   // Returns a true if the OrderedHashTable contains the key
   bool HasKey(Isolate* isolate, Handle<Object> key);
@@ -591,6 +595,9 @@ class SmallOrderedHashSet : public SmallOrderedHashTable<SmallOrderedHashSet> {
                       SmallOrderedHashTable<SmallOrderedHashSet>);
 };
 
+STATIC_ASSERT(kSmallOrderedHashSetMinCapacity ==
+              SmallOrderedHashSet::kMinCapacity);
+
 class SmallOrderedHashMap : public SmallOrderedHashTable<SmallOrderedHashMap> {
  public:
   DECL_CAST(SmallOrderedHashMap)
@@ -621,6 +628,9 @@ class SmallOrderedHashMap : public SmallOrderedHashTable<SmallOrderedHashMap> {
                       SmallOrderedHashTable<SmallOrderedHashMap>);
 };
 
+STATIC_ASSERT(kSmallOrderedHashMapMinCapacity ==
+              SmallOrderedHashMap::kMinCapacity);
+
 // TODO(gsathya): Rename this to OrderedHashTable, after we rename
 // OrderedHashTable to LargeOrderedHashTable. Also set up a
 // OrderedHashSetBase class as a base class for the two tables and use
@@ -628,7 +638,7 @@ class SmallOrderedHashMap : public SmallOrderedHashTable<SmallOrderedHashMap> {
 template <class SmallTable, class LargeTable>
 class OrderedHashTableHandler {
  public:
-  typedef int Entry;
+  using Entry = int;
 
   static Handle<HeapObject> Allocate(Isolate* isolate, int capacity);
   static bool Delete(Handle<HeapObject> table, Handle<Object> key);
@@ -676,7 +686,8 @@ class OrderedNameDictionary
       Isolate* isolate, Handle<OrderedNameDictionary> table, int entry);
 
   static Handle<OrderedNameDictionary> Allocate(
-      Isolate* isolate, int capacity, PretenureFlag pretenure = NOT_TENURED);
+      Isolate* isolate, int capacity,
+      AllocationType allocation = AllocationType::kYoung);
 
   static Handle<OrderedNameDictionary> Rehash(
       Isolate* isolate, Handle<OrderedNameDictionary> table, int new_capacity);
@@ -799,64 +810,6 @@ class SmallOrderedNameDictionary
 
   OBJECT_CONSTRUCTORS(SmallOrderedNameDictionary,
                       SmallOrderedHashTable<SmallOrderedNameDictionary>);
-};
-
-class JSCollectionIterator : public JSObject {
- public:
-  // [table]: the backing hash table mapping keys to values.
-  DECL_ACCESSORS(table, Object)
-
-  // [index]: The index into the data table.
-  DECL_ACCESSORS(index, Object)
-
-  void JSCollectionIteratorPrint(std::ostream& os, const char* name);
-
-// Layout description.
-#define JS_COLLECTION_ITERATOR_FIELDS(V) \
-  V(kTableOffset, kTaggedSize)           \
-  V(kIndexOffset, kTaggedSize)           \
-  /* Header size. */                     \
-  V(kSize, 0)
-
-  DEFINE_FIELD_OFFSET_CONSTANTS(JSObject::kHeaderSize,
-                                JS_COLLECTION_ITERATOR_FIELDS)
-#undef JS_COLLECTION_ITERATOR_FIELDS
-
-  OBJECT_CONSTRUCTORS(JSCollectionIterator, JSObject);
-};
-
-// OrderedHashTableIterator is an iterator that iterates over the keys and
-// values of an OrderedHashTable.
-//
-// The iterator has a reference to the underlying OrderedHashTable data,
-// [table], as well as the current [index] the iterator is at.
-//
-// When the OrderedHashTable is rehashed it adds a reference from the old table
-// to the new table as well as storing enough data about the changes so that the
-// iterator [index] can be adjusted accordingly.
-//
-// When the [Next] result from the iterator is requested, the iterator checks if
-// there is a newer table that it needs to transition to.
-template <class Derived, class TableType>
-class OrderedHashTableIterator : public JSCollectionIterator {
- public:
-  // Whether the iterator has more elements. This needs to be called before
-  // calling |CurrentKey| and/or |CurrentValue|.
-  bool HasMore();
-
-  // Move the index forward one.
-  void MoveNext() { set_index(Smi::FromInt(Smi::ToInt(index()) + 1)); }
-
-  // Returns the current key of the iterator. This should only be called when
-  // |HasMore| returns true.
-  inline Object CurrentKey();
-
- private:
-  // Transitions the iterator to the non obsolete backing store. This is a NOP
-  // if the [table] is not obsolete.
-  void Transition();
-
-  OBJECT_CONSTRUCTORS(OrderedHashTableIterator, JSCollectionIterator);
 };
 
 }  // namespace internal

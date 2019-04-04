@@ -159,7 +159,7 @@ class WasmCodeManagerTest : public TestWithContext,
   static constexpr uint32_t kJumpTableSize = RoundUp<kCodeAlignment>(
       JumpTableAssembler::SizeForNumberOfSlots(kNumFunctions));
 
-  using NativeModulePtr = std::unique_ptr<NativeModule>;
+  using NativeModulePtr = std::shared_ptr<NativeModule>;
 
   NativeModulePtr AllocModule(size_t size, ModuleStyle style) {
     std::shared_ptr<WasmModule> module(new WasmModule);
@@ -175,8 +175,9 @@ class WasmCodeManagerTest : public TestWithContext,
     std::unique_ptr<byte[]> exec_buff(new byte[size]);
     desc.buffer = exec_buff.get();
     desc.instr_size = static_cast<int>(size);
-    return native_module->AddCode(index, desc, 0, 0, {}, OwnedVector<byte>(),
-                                  WasmCode::kFunction, WasmCode::kOther);
+    std::unique_ptr<WasmCode> code = native_module->AddCode(
+        index, desc, 0, 0, {}, {}, WasmCode::kFunction, ExecutionTier::kNone);
+    return native_module->PublishCode(std::move(code)).code;
   }
 
   size_t page() const { return AllocatePageSize(); }
@@ -208,6 +209,7 @@ TEST_P(WasmCodeManagerTest, AllocateAndGoOverLimit) {
   NativeModulePtr native_module = AllocModule(1 * page(), GetParam());
   CHECK(native_module);
   CHECK_EQ(0, manager()->remaining_uncommitted_code_space());
+  WasmCodeRefScope code_ref_scope;
   uint32_t index = 0;
   WasmCode* code = AddCode(native_module.get(), index++, 1 * kCodeAlignment);
   CHECK_NOT_NULL(code);
@@ -236,6 +238,7 @@ TEST_P(WasmCodeManagerTest, TotalLimitIrrespectiveOfModuleCount) {
   NativeModulePtr nm2 = AllocModule(2 * page(), GetParam());
   CHECK(nm1);
   CHECK(nm2);
+  WasmCodeRefScope code_ref_scope;
   WasmCode* code = AddCode(nm1.get(), 0, 2 * page() - kJumpTableSize);
   CHECK_NOT_NULL(code);
   ASSERT_DEATH_IF_SUPPORTED(AddCode(nm2.get(), 0, 2 * page() - kJumpTableSize),
@@ -255,6 +258,7 @@ TEST_P(WasmCodeManagerTest, GrowingVsFixedModule) {
         "OOM in NativeModule::AllocateForCode");
   } else {
     // The module grows by one page. One page remains uncommitted.
+    WasmCodeRefScope code_ref_scope;
     CHECK_NOT_NULL(
         AddCode(nm.get(), 0, remaining_space_in_module + kCodeAlignment));
     CHECK_EQ(manager()->remaining_uncommitted_code_space(), 1 * page());
@@ -264,6 +268,7 @@ TEST_P(WasmCodeManagerTest, GrowingVsFixedModule) {
 TEST_P(WasmCodeManagerTest, CommitIncrements) {
   SetMaxCommittedMemory(10 * page());
   NativeModulePtr nm = AllocModule(3 * page(), GetParam());
+  WasmCodeRefScope code_ref_scope;
   WasmCode* code = AddCode(nm.get(), 0, kCodeAlignment);
   CHECK_NOT_NULL(code);
   CHECK_EQ(manager()->remaining_uncommitted_code_space(), 9 * page());
@@ -280,37 +285,42 @@ TEST_P(WasmCodeManagerTest, Lookup) {
 
   NativeModulePtr nm1 = AllocModule(1 * page(), GetParam());
   NativeModulePtr nm2 = AllocModule(1 * page(), GetParam());
-  WasmCode* code1_0 = AddCode(nm1.get(), 0, kCodeAlignment);
-  CHECK_EQ(nm1.get(), code1_0->native_module());
-  WasmCode* code1_1 = AddCode(nm1.get(), 1, kCodeAlignment);
-  WasmCode* code2_0 = AddCode(nm2.get(), 0, kCodeAlignment);
-  WasmCode* code2_1 = AddCode(nm2.get(), 1, kCodeAlignment);
-  CHECK_EQ(nm2.get(), code2_1->native_module());
+  Address mid_code1_1;
+  {
+    // The {WasmCodeRefScope} needs to die before {nm1} dies.
+    WasmCodeRefScope code_ref_scope;
+    WasmCode* code1_0 = AddCode(nm1.get(), 0, kCodeAlignment);
+    CHECK_EQ(nm1.get(), code1_0->native_module());
+    WasmCode* code1_1 = AddCode(nm1.get(), 1, kCodeAlignment);
+    WasmCode* code2_0 = AddCode(nm2.get(), 0, kCodeAlignment);
+    WasmCode* code2_1 = AddCode(nm2.get(), 1, kCodeAlignment);
+    CHECK_EQ(nm2.get(), code2_1->native_module());
 
-  CHECK_EQ(0, code1_0->index());
-  CHECK_EQ(1, code1_1->index());
-  CHECK_EQ(0, code2_0->index());
-  CHECK_EQ(1, code2_1->index());
+    CHECK_EQ(0, code1_0->index());
+    CHECK_EQ(1, code1_1->index());
+    CHECK_EQ(0, code2_0->index());
+    CHECK_EQ(1, code2_1->index());
 
-  // we know the manager object is allocated here, so we shouldn't
-  // find any WasmCode* associated with that ptr.
-  WasmCode* not_found =
-      manager()->LookupCode(reinterpret_cast<Address>(manager()));
-  CHECK_NULL(not_found);
-  WasmCode* found = manager()->LookupCode(code1_0->instruction_start());
-  CHECK_EQ(found, code1_0);
-  found = manager()->LookupCode(code2_1->instruction_start() +
-                                (code2_1->instructions().size() / 2));
-  CHECK_EQ(found, code2_1);
-  found = manager()->LookupCode(code2_1->instruction_start() +
-                                code2_1->instructions().size() - 1);
-  CHECK_EQ(found, code2_1);
-  found = manager()->LookupCode(code2_1->instruction_start() +
-                                code2_1->instructions().size());
-  CHECK_NULL(found);
-  Address mid_code1_1 =
-      code1_1->instruction_start() + (code1_1->instructions().size() / 2);
-  CHECK_EQ(code1_1, manager()->LookupCode(mid_code1_1));
+    // we know the manager object is allocated here, so we shouldn't
+    // find any WasmCode* associated with that ptr.
+    WasmCode* not_found =
+        manager()->LookupCode(reinterpret_cast<Address>(manager()));
+    CHECK_NULL(not_found);
+    WasmCode* found = manager()->LookupCode(code1_0->instruction_start());
+    CHECK_EQ(found, code1_0);
+    found = manager()->LookupCode(code2_1->instruction_start() +
+                                  (code2_1->instructions().size() / 2));
+    CHECK_EQ(found, code2_1);
+    found = manager()->LookupCode(code2_1->instruction_start() +
+                                  code2_1->instructions().size() - 1);
+    CHECK_EQ(found, code2_1);
+    found = manager()->LookupCode(code2_1->instruction_start() +
+                                  code2_1->instructions().size());
+    CHECK_NULL(found);
+    mid_code1_1 =
+        code1_1->instruction_start() + (code1_1->instructions().size() / 2);
+    CHECK_EQ(code1_1, manager()->LookupCode(mid_code1_1));
+  }
   nm1.reset();
   CHECK_NULL(manager()->LookupCode(mid_code1_1));
 }
@@ -320,6 +330,7 @@ TEST_P(WasmCodeManagerTest, LookupWorksAfterRewrite) {
 
   NativeModulePtr nm1 = AllocModule(1 * page(), GetParam());
 
+  WasmCodeRefScope code_ref_scope;
   WasmCode* code0 = AddCode(nm1.get(), 0, kCodeAlignment);
   WasmCode* code1 = AddCode(nm1.get(), 1, kCodeAlignment);
   CHECK_EQ(0, code0->index());

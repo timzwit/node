@@ -34,7 +34,7 @@ class Code : public HeapObject {
   NEVER_READ_ONLY_SPACE
   // Opaque data type for encapsulating code flags like kind, inline
   // cache state, and arguments count.
-  typedef uint32_t Flags;
+  using Flags = uint32_t;
 
 #define CODE_KIND_LIST(V)   \
   V(OPTIMIZED_FUNCTION)     \
@@ -89,6 +89,7 @@ class Code : public HeapObject {
   // SourcePositionTableWithFrameCache.
   DECL_ACCESSORS(source_position_table, Object)
   inline ByteArray SourcePositionTable() const;
+  inline ByteArray SourcePositionTableIfCollected() const;
 
   // [code_data_container]: A container indirection for all mutable fields.
   DECL_ACCESSORS(code_data_container, CodeDataContainer)
@@ -774,13 +775,32 @@ class BytecodeArray : public FixedArrayBase {
   // Accessors for handler table containing offsets of exception handlers.
   DECL_ACCESSORS(handler_table, ByteArray)
 
-  // Accessors for source position table containing mappings between byte code
-  // offset and source position or SourcePositionTableWithFrameCache.
+  // Accessors for source position table. Can contain:
+  // * undefined (initial value)
+  // * empty_byte_array (for bytecode generated for functions that will never
+  // have source positions, e.g. native functions).
+  // * ByteArray (when source positions have been collected for the bytecode)
+  // * SourcePositionTableWithFrameCache (as above but with a frame cache)
+  // * exception (when an error occurred while explicitly collecting source
+  // positions for pre-existing bytecode).
   DECL_ACCESSORS(source_position_table, Object)
 
-  inline ByteArray SourcePositionTable();
-  inline bool HasSourcePositionTable();
+  // This must only be called if source position collection has already been
+  // attempted. (If it failed because of an exception then it will return
+  // empty_byte_array).
+  inline ByteArray SourcePositionTable() const;
+  // If source positions have not been collected or an exception has been thrown
+  // this will return empty_byte_array.
+  inline ByteArray SourcePositionTableIfCollected() const;
+  inline bool HasSourcePositionTable() const;
+  inline bool DidSourcePositionGenerationFail() const;
   inline void ClearFrameCacheFromSourcePositionTable();
+
+  // Indicates that an attempt was made to collect source positions, but that it
+  // failed most likely due to stack exhaustion. When in this state
+  // |SourcePositionTable| will return an empty byte array rather than crashing
+  // as it would if no attempt was ever made to collect source positions.
+  inline void SetSourcePositionsFailedToCollect();
 
   DECL_CAST(BytecodeArray)
 
@@ -829,6 +849,11 @@ class BytecodeArray : public FixedArrayBase {
   DEFINE_FIELD_OFFSET_CONSTANTS(FixedArrayBase::kHeaderSize,
                                 BYTECODE_ARRAY_FIELDS)
 #undef BYTECODE_ARRAY_FIELDS
+
+  // InterpreterEntryTrampoline expects these fields to be next to each other
+  // and writes a 16-bit value to reset them.
+  STATIC_ASSERT(BytecodeArray::kBytecodeAgeOffset ==
+                kOSRNestingLevelOffset + kCharSize);
 
   // Maximal memory consumption for a single BytecodeArray.
   static const int kMaxSize = 512 * MB;
@@ -906,7 +931,7 @@ class DeoptimizationData : public FixedArray {
 
   // Allocates a DeoptimizationData.
   static Handle<DeoptimizationData> New(Isolate* isolate, int deopt_entry_count,
-                                        PretenureFlag pretenure);
+                                        AllocationType allocation);
 
   // Return an empty DeoptimizationData.
   static Handle<DeoptimizationData> Empty(Isolate* isolate);

@@ -197,6 +197,9 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
     case FEEDBACK_CELL_TYPE:
       FeedbackCell::cast(*this)->FeedbackCellPrint(os);
       break;
+    case CLOSURE_FEEDBACK_CELL_ARRAY_TYPE:
+      ClosureFeedbackCellArray::cast(*this)->ClosureFeedbackCellArrayPrint(os);
+      break;
     case FEEDBACK_VECTOR_TYPE:
       FeedbackVector::cast(*this)->FeedbackVectorPrint(os);
       break;
@@ -419,6 +422,7 @@ void HeapObject::HeapObjectPrint(std::ostream& os) {  // NOLINT
     case WEAK_ARRAY_LIST_TYPE:
       WeakArrayList::cast(*this)->WeakArrayListPrint(os);
       break;
+    case EMPTY_STRING_TYPE:
     case INTERNALIZED_STRING_TYPE:
     case EXTERNAL_INTERNALIZED_STRING_TYPE:
     case ONE_BYTE_INTERNALIZED_STRING_TYPE:
@@ -1085,6 +1089,10 @@ void FeedbackMetadata::FeedbackMetadataPrint(std::ostream& os) {
   os << "\n";
 }
 
+void ClosureFeedbackCellArray::ClosureFeedbackCellArrayPrint(std::ostream& os) {
+  PrintFixedArrayWithHeader(os, *this, "ClosureFeedbackCellArray");
+}
+
 void FeedbackVector::FeedbackVectorPrint(std::ostream& os) {  // NOLINT
   PrintHeader(os, "FeedbackVector");
   os << "\n - length: " << length();
@@ -1162,7 +1170,6 @@ void FeedbackNexus::Print(std::ostream& os) {  // NOLINT
       os << "ForIn:" << GetForInFeedback();
       break;
     }
-    case FeedbackSlotKind::kCreateClosure:
     case FeedbackSlotKind::kLiteral:
     case FeedbackSlotKind::kTypeProfile:
       break;
@@ -1812,7 +1819,7 @@ void WasmExceptionTag::WasmExceptionTagPrint(std::ostream& os) {  // NOLINT
 }
 
 void WasmInstanceObject::WasmInstanceObjectPrint(std::ostream& os) {  // NOLINT
-  PrintHeader(os, "WasmInstanceObject");
+  JSObjectPrintHeader(os, *this, "WasmInstanceObject");
   os << "\n - module_object: " << Brief(module_object());
   os << "\n - exports_object: " << Brief(exports_object());
   os << "\n - native_context: " << Brief(native_context());
@@ -1832,8 +1839,8 @@ void WasmInstanceObject::WasmInstanceObjectPrint(std::ostream& os) {  // NOLINT
   if (has_debug_info()) {
     os << "\n - debug_info: " << Brief(debug_info());
   }
-  if (has_table_object()) {
-    os << "\n - table_object: " << Brief(table_object());
+  for (int i = 0; i < tables()->length(); i++) {
+    os << "\n - table " << i << ": " << Brief(tables()->get(i));
   }
   os << "\n - imported_function_refs: " << Brief(imported_function_refs());
   if (has_indirect_function_table_refs()) {
@@ -1857,6 +1864,7 @@ void WasmInstanceObject::WasmInstanceObjectPrint(std::ostream& os) {  // NOLINT
      << static_cast<void*>(indirect_function_table_sig_ids());
   os << "\n - indirect_function_table_targets: "
      << static_cast<void*>(indirect_function_table_targets());
+  JSObjectPrintBody(os, *this);
   os << "\n";
 }
 
@@ -2089,6 +2097,7 @@ void JSDateTimeFormat::JSDateTimeFormatPrint(std::ostream& os) {  // NOLINT
   JSObjectPrintHeader(os, *this, "JSDateTimeFormat");
   os << "\n - icu locale: " << Brief(icu_locale());
   os << "\n - icu simple date format: " << Brief(icu_simple_date_format());
+  os << "\n - icu date interval format: " << Brief(icu_date_interval_format());
   os << "\n - bound format: " << Brief(bound_format());
   os << "\n - hour cycle: " << HourCycleAsString();
   JSObjectPrintBody(os, *this);
@@ -2692,6 +2701,10 @@ inline i::Object GetObjectFromRaw(void* object) {
 //
 // The following functions are used by our gdb macros.
 //
+V8_EXPORT_PRIVATE extern i::Object _v8_internal_Get_Object(void* object) {
+  return GetObjectFromRaw(object);
+}
+
 V8_EXPORT_PRIVATE extern void _v8_internal_Print_Object(void* object) {
   GetObjectFromRaw(object)->Print();
 }

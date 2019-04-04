@@ -15,8 +15,8 @@
 
 namespace v8 {
 namespace internal {
-typedef FlexibleWeakBodyDescriptor<HeapObject::kHeaderSize>
-    WeakArrayBodyDescriptor;
+using WeakArrayBodyDescriptor =
+    FlexibleWeakBodyDescriptor<HeapObject::kHeaderSize>;
 
 #define FIXED_ARRAY_SUB_INSTANCE_TYPE_LIST(V)    \
   V(BYTECODE_ARRAY_CONSTANT_POOL_SUB_TYPE)       \
@@ -124,10 +124,9 @@ class FixedArray : public FixedArrayBase {
   Handle<T> GetValueChecked(Isolate* isolate, int index) const;
 
   // Return a grown copy if the index is bigger than the array's length.
-  static Handle<FixedArray> SetAndGrow(Isolate* isolate,
-                                       Handle<FixedArray> array, int index,
-                                       Handle<Object> value,
-                                       PretenureFlag pretenure = NOT_TENURED);
+  static Handle<FixedArray> SetAndGrow(
+      Isolate* isolate, Handle<FixedArray> array, int index,
+      Handle<Object> value, AllocationType allocation = AllocationType::kYoung);
 
   // Setter that uses write barrier.
   inline void set(int index, Object value);
@@ -156,6 +155,9 @@ class FixedArray : public FixedArrayBase {
 
   inline void MoveElements(Heap* heap, int dst_index, int src_index, int len,
                            WriteBarrierMode mode);
+
+  inline void CopyElements(Heap* heap, int dst_index, FixedArray src,
+                           int src_index, int len, WriteBarrierMode mode);
 
   inline void FillWithHoles(int from, int to);
 
@@ -196,7 +198,7 @@ class FixedArray : public FixedArrayBase {
   DECL_PRINTER(FixedArray)
   DECL_VERIFIER(FixedArray)
 
-  typedef FlexibleBodyDescriptor<kHeaderSize> BodyDescriptor;
+  using BodyDescriptor = FlexibleBodyDescriptor<kHeaderSize>;
 
  protected:
   // Set operation on FixedArray without using write barriers. Can
@@ -296,7 +298,7 @@ class WeakFixedArray : public HeapObject {
   DECL_PRINTER(WeakFixedArray)
   DECL_VERIFIER(WeakFixedArray)
 
-  typedef WeakArrayBodyDescriptor BodyDescriptor;
+  using BodyDescriptor = WeakArrayBodyDescriptor;
 
   // Layout description.
 #define WEAK_FIXED_ARRAY_FIELDS(V) \
@@ -377,14 +379,14 @@ class WeakArrayList : public HeapObject {
   DEFINE_FIELD_OFFSET_CONSTANTS(HeapObject::kHeaderSize, WEAK_ARRAY_LIST_FIELDS)
 #undef WEAK_ARRAY_LIST_FIELDS
 
-  typedef WeakArrayBodyDescriptor BodyDescriptor;
+  using BodyDescriptor = WeakArrayBodyDescriptor;
 
   static const int kMaxCapacity =
       (FixedArray::kMaxSize - kHeaderSize) / kTaggedSize;
 
   static Handle<WeakArrayList> EnsureSpace(
       Isolate* isolate, Handle<WeakArrayList> array, int length,
-      PretenureFlag pretenure = NOT_TENURED);
+      AllocationType allocation = AllocationType::kYoung);
 
   // Returns the number of non-cleaned weak references in the array.
   int CountLiveWeakReferences() const;
@@ -550,8 +552,9 @@ class ByteArray : public FixedArrayBase {
 template <class T>
 class PodArray : public ByteArray {
  public:
-  static Handle<PodArray<T>> New(Isolate* isolate, int length,
-                                 PretenureFlag pretenure = NOT_TENURED);
+  static Handle<PodArray<T>> New(
+      Isolate* isolate, int length,
+      AllocationType allocation = AllocationType::kYoung);
   void copy_out(int index, T* result) {
     ByteArray::copy_out(index * sizeof(T), reinterpret_cast<byte*>(result),
                         sizeof(T));
@@ -649,7 +652,7 @@ class FixedTypedArrayBase : public FixedArrayBase {
 template <class Traits>
 class FixedTypedArray : public FixedTypedArrayBase {
  public:
-  typedef typename Traits::ElementType ElementType;
+  using ElementType = typename Traits::ElementType;
   static const InstanceType kInstanceType = Traits::kInstanceType;
 
   DECL_CAST(FixedTypedArray<Traits>)
@@ -684,7 +687,7 @@ class FixedTypedArray : public FixedTypedArrayBase {
   STATIC_ASSERT(sizeof(elementType) <= FixedTypedArrayBase::kMaxElementSize); \
   class Type##ArrayTraits {                                                   \
    public: /* NOLINT */                                                       \
-    typedef elementType ElementType;                                          \
+    using ElementType = elementType;                                          \
     static const InstanceType kInstanceType = FIXED_##TYPE##_ARRAY_TYPE;      \
     static const char* ArrayTypeName() { return "Fixed" #Type "Array"; }      \
     static inline Handle<Object> ToHandle(Isolate* isolate,                   \
@@ -692,7 +695,7 @@ class FixedTypedArray : public FixedTypedArrayBase {
     static inline elementType defaultValue();                                 \
   };                                                                          \
                                                                               \
-  typedef FixedTypedArray<Type##ArrayTraits> Fixed##Type##Array;
+  using Fixed##Type##Array = FixedTypedArray<Type##ArrayTraits>;
 
 TYPED_ARRAYS(FIXED_TYPED_ARRAY_TRAITS)
 

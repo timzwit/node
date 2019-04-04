@@ -99,6 +99,7 @@
 //         - ScopeInfo
 //         - ModuleInfo
 //         - ScriptContextTable
+//         - ClosureFeedbackCellArray
 //       - FixedDoubleArray
 //     - Name
 //       - String
@@ -192,9 +193,9 @@ class PropertyDescriptorObject;
 enum WriteBarrierMode {
   SKIP_WRITE_BARRIER,
   UPDATE_WEAK_WRITE_BARRIER,
+  UPDATE_EPHEMERON_KEY_WRITE_BARRIER,
   UPDATE_WRITE_BARRIER
 };
-
 
 // PropertyNormalizationMode is used to specify whether to keep
 // inobject properties when normalizing properties of a JSObject.
@@ -256,6 +257,7 @@ class AllocationSite;
 class ByteArray;
 class CachedTemplateObject;
 class Cell;
+class ClosureFeedbackCellArray;
 class ConsString;
 class DependentCode;
 class ElementsAccessor;
@@ -345,6 +347,7 @@ class ZoneForwardList;
   V(Constructor)                               \
   V(Context)                                   \
   V(CoverageInfo)                              \
+  V(ClosureFeedbackCellArray)                  \
   V(DataHandler)                               \
   V(DeoptimizationData)                        \
   V(DependentCode)                             \

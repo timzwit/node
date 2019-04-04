@@ -91,9 +91,6 @@
       # Misc.
       'V8 Linux gcc': 'release_x86_gcc_no_goma',
       'V8 Linux64 gcc - debug': 'debug_x64_gcc_no_goma',
-      # TODO(machenbach): Remove after switching.
-      'V8 Linux gcc 4.8': 'release_x86_gcc',
-      'V8 Linux64 gcc 4.8 - debug': 'debug_x64_gcc',
       # FYI.
       'V8 Linux64 - pointer compression': 'release_x64_pointer_compression',
       'V8 Linux64 - arm64 - sim - pointer compression - builder':
@@ -434,7 +431,8 @@
     'release_x64_fuchsia_trybot': [
       'release_trybot', 'x64', 'fuchsia'],
     'release_x64_gcc_coverage': [
-      'release_bot', 'x64', 'coverage', 'gcc', 'no_custom_libcxx', 'no_sysroot'],
+      'release', 'static', 'x64', 'coverage', 'gcc', 'no_custom_libcxx',
+      'no_goma', 'no_sysroot'],
     'release_x64_internal': [
       'release_bot', 'x64', 'v8_snapshot_internal'],
     'release_x64_jumbo': [
@@ -482,8 +480,6 @@
       'debug_bot', 'x64', 'v8_snapshot_custom'],
     'debug_x64_fuchsia': [
       'debug_bot', 'x64', 'fuchsia'],
-    'debug_x64_gcc': [
-      'debug_bot', 'x64', 'gcc'],
     'debug_x64_gcc_no_goma': [
       'debug', 'shared', 'v8_enable_slow_dchecks', 'v8_optimized_debug', 'x64',
       'gcc', 'no_goma'],
@@ -518,8 +514,7 @@
     'debug_x86_vtunejit': [
       'debug_bot', 'x86', 'v8_enable_vtunejit'],
     'full_debug_x86': [
-      'debug', 'x86', 'goma', 'static', 'v8_enable_slow_dchecks',
-      'v8_full_debug'],
+      'debug', 'x86', 'goma', 'v8_enable_slow_dchecks', 'v8_full_debug'],
 
     # Release configs for x86.
     'release_x86': [
@@ -528,8 +523,6 @@
       'release_bot', 'x86', 'v8_no_enable_embedded_builtins'],
     'release_x86_noembed_trybot': [
       'release_trybot', 'x86', 'v8_no_enable_embedded_builtins'],
-    'release_x86_gcc': [
-      'release_bot', 'x86', 'gcc'],
     # TODO(machenbach): Enable back goma once supported.
     'release_x86_gcc_minimal_symbols': [
       'release', 'static', 'x86', 'gcc', 'minimal_symbols', 'no_goma'],

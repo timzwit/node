@@ -2054,7 +2054,7 @@ void TurboAssembler::LoadCodeObjectEntry(Register destination,
 
   if (options().isolate_independent_code) {
     DCHECK(root_array_available());
-    Label if_code_is_builtin, out;
+    Label if_code_is_off_heap, out;
 
     UseScratchRegisterScope temps(this);
     Register scratch = temps.AcquireX();
@@ -2062,23 +2062,23 @@ void TurboAssembler::LoadCodeObjectEntry(Register destination,
     DCHECK(!AreAliased(destination, scratch));
     DCHECK(!AreAliased(code_object, scratch));
 
-    // Check whether the Code object is a builtin. If so, call its (off-heap)
-    // entry point directly without going through the (on-heap) trampoline.
-    // Otherwise, just call the Code object as always.
+    // Check whether the Code object is an off-heap trampoline. If so, call its
+    // (off-heap) entry point directly without going through the (on-heap)
+    // trampoline.  Otherwise, just call the Code object as always.
 
-    Ldrsw(scratch, FieldMemOperand(code_object, Code::kBuiltinIndexOffset));
-    Cmp(scratch, Operand(Builtins::kNoBuiltinId));
-    B(ne, &if_code_is_builtin);
+    Ldrsw(scratch, FieldMemOperand(code_object, Code::kFlagsOffset));
+    Tst(scratch, Operand(Code::IsOffHeapTrampoline::kMask));
+    B(ne, &if_code_is_off_heap);
 
-    // A non-builtin Code object, the entry point is at
+    // Not an off-heap trampoline object, the entry point is at
     // Code::raw_instruction_start().
     Add(destination, code_object, Code::kHeaderSize - kHeapObjectTag);
     B(&out);
 
-    // A builtin Code object, the entry point is loaded from the builtin entry
+    // An off-heap trampoline, the entry point is loaded from the builtin entry
     // table.
-    // The builtin index is loaded in scratch.
-    bind(&if_code_is_builtin);
+    bind(&if_code_is_off_heap);
+    Ldrsw(scratch, FieldMemOperand(code_object, Code::kBuiltinIndexOffset));
     Lsl(destination, scratch, kSystemPointerSizeLog2);
     Add(destination, destination, kRootRegister);
     Ldr(destination,
@@ -2585,14 +2585,10 @@ void MacroAssembler::EnterExitFrame(bool save_doubles, const Register& scratch,
   Mov(fp, sp);
   Mov(scratch, StackFrame::TypeToMarker(frame_type));
   Push(scratch, xzr);
-  Mov(scratch, CodeObject());
-  Push(scratch, padreg);
   //          fp[8]: CallerPC (lr)
   //    fp -> fp[0]: CallerFP (old fp)
   //          fp[-8]: STUB marker
-  //          fp[-16]: Space reserved for SPOffset.
-  //          fp[-24]: CodeObject()
-  //    sp -> fp[-32]: padding
+  //    sp -> fp[-16]: Space reserved for SPOffset.
   STATIC_ASSERT((2 * kSystemPointerSize) ==
                 ExitFrameConstants::kCallerSPOffset);
   STATIC_ASSERT((1 * kSystemPointerSize) ==
@@ -2600,9 +2596,6 @@ void MacroAssembler::EnterExitFrame(bool save_doubles, const Register& scratch,
   STATIC_ASSERT((0 * kSystemPointerSize) ==
                 ExitFrameConstants::kCallerFPOffset);
   STATIC_ASSERT((-2 * kSystemPointerSize) == ExitFrameConstants::kSPOffset);
-  STATIC_ASSERT((-3 * kSystemPointerSize) == ExitFrameConstants::kCodeOffset);
-  STATIC_ASSERT((-4 * kSystemPointerSize) ==
-                ExitFrameConstants::kPaddingOffset);
 
   // Save the frame pointer and context pointer in the top frame.
   Mov(scratch,
@@ -2612,7 +2605,7 @@ void MacroAssembler::EnterExitFrame(bool save_doubles, const Register& scratch,
       ExternalReference::Create(IsolateAddressId::kContextAddress, isolate()));
   Str(cp, MemOperand(scratch));
 
-  STATIC_ASSERT((-4 * kSystemPointerSize) ==
+  STATIC_ASSERT((-2 * kSystemPointerSize) ==
                 ExitFrameConstants::kLastExitFrameField);
   if (save_doubles) {
     ExitFramePreserveFPRegs();
@@ -2629,8 +2622,7 @@ void MacroAssembler::EnterExitFrame(bool save_doubles, const Register& scratch,
   //   fp -> fp[0]: CallerFP (old fp)
   //         fp[-8]: STUB marker
   //         fp[-16]: Space reserved for SPOffset.
-  //         fp[-24]: CodeObject()
-  //         fp[-24 - fp_size]: Saved doubles (if save_doubles is true).
+  //         fp[-16 - fp_size]: Saved doubles (if save_doubles is true).
   //         sp[8]: Extra space reserved for caller (if extra_space != 0).
   //   sp -> sp[0]: Space reserved for the return address.
 
@@ -2692,6 +2684,9 @@ void MacroAssembler::IncrementCounter(StatsCounter* counter, int value,
                                       Register scratch1, Register scratch2) {
   DCHECK_NE(value, 0);
   if (FLAG_native_code_counters && counter->Enabled()) {
+    // This operation has to be exactly 32-bit wide in case the external
+    // reference table redirects the counter to a uint32_t dummy_stats_counter_
+    // field.
     Mov(scratch2, ExternalReference::Create(counter));
     Ldr(scratch1.W(), MemOperand(scratch2));
     Add(scratch1.W(), scratch1.W(), value);
@@ -2838,18 +2833,25 @@ void TurboAssembler::DecompressTaggedPointer(const Register& destination,
 void TurboAssembler::DecompressAnyTagged(const Register& destination,
                                          const MemOperand& field_operand) {
   RecordComment("[ DecompressAnyTagged");
-  UseScratchRegisterScope temps(this);
   Ldrsw(destination, field_operand);
-  // Branchlessly compute |masked_root|:
-  // masked_root = HAS_SMI_TAG(destination) ? 0 : kRootRegister;
-  STATIC_ASSERT((kSmiTagSize == 1) && (kSmiTag == 0));
-  Register masked_root = temps.AcquireX();
-  // Sign extend tag bit to entire register.
-  Sbfx(masked_root, destination, 0, kSmiTagSize);
-  And(masked_root, masked_root, kRootRegister);
-  // Now this add operation will either leave the value unchanged if it is a smi
-  // or add the isolate root if it is a heap object.
-  Add(destination, masked_root, destination);
+  if (kUseBranchlessPtrDecompression) {
+    UseScratchRegisterScope temps(this);
+    // Branchlessly compute |masked_root|:
+    // masked_root = HAS_SMI_TAG(destination) ? 0 : kRootRegister;
+    STATIC_ASSERT((kSmiTagSize == 1) && (kSmiTag == 0));
+    Register masked_root = temps.AcquireX();
+    // Sign extend tag bit to entire register.
+    Sbfx(masked_root, destination, 0, kSmiTagSize);
+    And(masked_root, masked_root, kRootRegister);
+    // Now this add operation will either leave the value unchanged if it is a
+    // smi or add the isolate root if it is a heap object.
+    Add(destination, masked_root, destination);
+  } else {
+    Label done;
+    JumpIfSmi(destination, &done);
+    Add(destination, kRootRegister, destination);
+    bind(&done);
+  }
   RecordComment("]");
 }
 
@@ -3029,6 +3031,28 @@ void TurboAssembler::RestoreRegisters(RegList registers) {
   }
 
   PopCPURegList(regs);
+}
+
+void TurboAssembler::CallEphemeronKeyBarrier(Register object, Register address,
+                                             SaveFPRegsMode fp_mode) {
+  EphemeronKeyBarrierDescriptor descriptor;
+  RegList registers = descriptor.allocatable_registers();
+
+  SaveRegisters(registers);
+
+  Register object_parameter(
+      descriptor.GetRegisterParameter(EphemeronKeyBarrierDescriptor::kObject));
+  Register slot_parameter(descriptor.GetRegisterParameter(
+      EphemeronKeyBarrierDescriptor::kSlotAddress));
+  Register fp_mode_parameter(
+      descriptor.GetRegisterParameter(EphemeronKeyBarrierDescriptor::kFPMode));
+
+  MovePair(object_parameter, object, slot_parameter, address);
+
+  Mov(fp_mode_parameter, Smi::FromEnum(fp_mode));
+  Call(isolate()->builtins()->builtin_handle(Builtins::kEphemeronKeyBarrier),
+       RelocInfo::CODE_TARGET);
+  RestoreRegisters(registers);
 }
 
 void TurboAssembler::CallRecordWriteStub(

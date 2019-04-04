@@ -5,6 +5,7 @@
 #include "test/unittests/interpreter/interpreter-assembler-unittest.h"
 
 #include "src/code-factory.h"
+#include "src/compiler/node-properties.h"
 #include "src/compiler/node.h"
 #include "src/interface-descriptors.h"
 #include "src/isolate.h"
@@ -535,6 +536,19 @@ TARGET_TEST_F(InterpreterAssemblerTest, LoadFeedbackVector) {
     InterpreterAssemblerForTest m(&state, bytecode);
     Node* feedback_vector = m.LoadFeedbackVector();
 
+    // Feedback vector is a phi node with two inputs. One of them is loading the
+    // feedback vector and the other is undefined constant (when feedback
+    // vectors aren't allocated). Find the input that loads feedback vector.
+    CHECK(feedback_vector->opcode() == i::compiler::IrOpcode::kPhi);
+    Node* value0 =
+        i::compiler::NodeProperties::GetValueInput(feedback_vector, 0);
+    Node* value1 =
+        i::compiler::NodeProperties::GetValueInput(feedback_vector, 1);
+    Node* load_feedback_vector = value0;
+    if (value0->opcode() == i::compiler::IrOpcode::kHeapConstant) {
+      load_feedback_vector = value1;
+    }
+
     Matcher<Node*> load_function_matcher = IsBitcastWordToTagged(
         m.IsLoad(MachineType::Pointer(), c::IsLoadParentFramePointer(),
                  c::IsIntPtrConstant(Register::function_closure().ToOperand() *
@@ -543,7 +557,7 @@ TARGET_TEST_F(InterpreterAssemblerTest, LoadFeedbackVector) {
         MachineType::AnyTagged(), load_function_matcher,
         c::IsIntPtrConstant(JSFunction::kFeedbackCellOffset - kHeapObjectTag));
     EXPECT_THAT(
-        feedback_vector,
+        load_feedback_vector,
         m.IsLoad(MachineType::AnyTagged(), load_vector_cell_matcher,
                  c::IsIntPtrConstant(Cell::kValueOffset - kHeapObjectTag)));
   }

@@ -7,6 +7,7 @@
 #include "src/handles-inl.h"
 #include "src/objects-inl.h"
 #include "src/objects/allocation-site-inl.h"
+#include "src/zone/zone-handle-set.h"
 
 namespace v8 {
 namespace internal {
@@ -136,13 +137,14 @@ class PretenureModeDependency final
  public:
   // TODO(neis): Once the concurrent compiler frontend is always-on, we no
   // longer need to explicitly store the mode.
-  PretenureModeDependency(const AllocationSiteRef& site, PretenureFlag mode)
-      : site_(site), mode_(mode) {
-    DCHECK_EQ(mode_, site_.GetPretenureMode());
+  PretenureModeDependency(const AllocationSiteRef& site,
+                          AllocationType allocation)
+      : site_(site), allocation_(allocation) {
+    DCHECK_EQ(allocation, site_.GetAllocationType());
   }
 
   bool IsValid() const override {
-    return mode_ == site_.object()->GetPretenureMode();
+    return allocation_ == site_.object()->GetAllocationType();
   }
 
   void Install(const MaybeObjectHandle& code) override {
@@ -158,7 +160,7 @@ class PretenureModeDependency final
 
  private:
   AllocationSiteRef site_;
-  PretenureFlag mode_;
+  AllocationType allocation_;
 };
 
 class FieldTypeDependency final : public CompilationDependencies::Dependency {
@@ -376,11 +378,12 @@ void CompilationDependencies::DependOnTransition(const MapRef& target_map) {
   }
 }
 
-PretenureFlag CompilationDependencies::DependOnPretenureMode(
+AllocationType CompilationDependencies::DependOnPretenureMode(
     const AllocationSiteRef& site) {
-  PretenureFlag mode = site.GetPretenureMode();
-  dependencies_.push_front(new (zone_) PretenureModeDependency(site, mode));
-  return mode;
+  AllocationType allocation = site.GetAllocationType();
+  dependencies_.push_front(new (zone_)
+                               PretenureModeDependency(site, allocation));
+  return allocation;
 }
 
 PropertyConstness CompilationDependencies::DependOnFieldConstness(
@@ -530,19 +533,25 @@ bool CompilationDependencies::Commit(Handle<Code> code) {
 namespace {
 // This function expects to never see a JSProxy.
 void DependOnStablePrototypeChain(CompilationDependencies* deps, MapRef map,
-                                  const JSObjectRef& last_prototype) {
+                                  base::Optional<JSObjectRef> last_prototype) {
   while (true) {
     map.SerializePrototype();
-    JSObjectRef proto = map.prototype().AsJSObject();
+    HeapObjectRef proto = map.prototype();
+    if (!proto.IsJSObject()) {
+      CHECK_EQ(proto.map().oddball_type(), OddballType::kNull);
+      break;
+    }
     map = proto.map();
     deps->DependOnStableMap(map);
-    if (proto.equals(last_prototype)) break;
+    if (last_prototype.has_value() && proto.equals(*last_prototype)) break;
   }
 }
 }  // namespace
 
+template <class MapContainer>
 void CompilationDependencies::DependOnStablePrototypeChains(
-    std::vector<Handle<Map>> const& receiver_maps, const JSObjectRef& holder) {
+    MapContainer const& receiver_maps, WhereToStart start,
+    base::Optional<JSObjectRef> last_prototype) {
   // Determine actual holder and perform prototype chain checks.
   for (auto map : receiver_maps) {
     MapRef receiver_map(broker_, map);
@@ -553,9 +562,16 @@ void CompilationDependencies::DependOnStablePrototypeChains(
           broker_->native_context().GetConstructorFunction(receiver_map);
       if (constructor.has_value()) receiver_map = constructor->initial_map();
     }
-    DependOnStablePrototypeChain(this, receiver_map, holder);
+    if (start == kStartAtReceiver) DependOnStableMap(receiver_map);
+    DependOnStablePrototypeChain(this, receiver_map, last_prototype);
   }
 }
+template void CompilationDependencies::DependOnStablePrototypeChains(
+    MapHandles const& receiver_maps, WhereToStart start,
+    base::Optional<JSObjectRef> last_prototype);
+template void CompilationDependencies::DependOnStablePrototypeChains(
+    ZoneHandleSet<Map> const& receiver_maps, WhereToStart start,
+    base::Optional<JSObjectRef> last_prototype);
 
 void CompilationDependencies::DependOnElementsKinds(
     const AllocationSiteRef& site) {

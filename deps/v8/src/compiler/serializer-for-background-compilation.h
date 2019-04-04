@@ -6,6 +6,7 @@
 #define V8_COMPILER_SERIALIZER_FOR_BACKGROUND_COMPILATION_H_
 
 #include "src/base/optional.h"
+#include "src/compiler/access-info.h"
 #include "src/handles.h"
 #include "src/maybe-handles.h"
 #include "src/utils.h"
@@ -47,19 +48,15 @@ namespace compiler {
   V(SwitchOnGeneratorState)       \
   V(Throw)
 
-#define CLEAR_ACCUMULATOR_LIST(V)   \
-  V(CreateEmptyObjectLiteral)       \
-  V(CreateMappedArguments)          \
-  V(CreateRestParameter)            \
-  V(CreateUnmappedArguments)        \
-  V(LdaContextSlot)                 \
-  V(LdaCurrentContextSlot)          \
-  V(LdaGlobal)                      \
-  V(LdaGlobalInsideTypeof)          \
-  V(LdaImmutableContextSlot)        \
-  V(LdaImmutableCurrentContextSlot) \
-  V(LdaNamedProperty)               \
-  V(LdaNamedPropertyNoFeedback)
+#define CLEAR_ACCUMULATOR_LIST(V) \
+  V(CreateEmptyObjectLiteral)     \
+  V(CreateMappedArguments)        \
+  V(CreateRestParameter)          \
+  V(CreateUnmappedArguments)      \
+  V(LdaContextSlot)               \
+  V(LdaCurrentContextSlot)        \
+  V(LdaImmutableContextSlot)      \
+  V(LdaImmutableCurrentContextSlot)
 
 #define UNCONDITIONAL_JUMPS_LIST(V) \
   V(Jump)                           \
@@ -86,60 +83,73 @@ namespace compiler {
   V(JumpIfUndefined)              \
   V(JumpIfUndefinedConstant)
 
-#define INGORED_BYTECODE_LIST(V) \
-  V(TestEqual)                   \
-  V(TestEqualStrict)             \
-  V(TestLessThan)                \
-  V(TestGreaterThan)             \
-  V(TestLessThanOrEqual)         \
-  V(TestGreaterThanOrEqual)      \
-  V(TestReferenceEqual)          \
-  V(TestInstanceOf)              \
-  V(TestIn)                      \
-  V(TestUndetectable)            \
-  V(TestNull)                    \
-  V(TestUndefined)               \
-  V(TestTypeOf)                  \
-  V(ThrowReferenceErrorIfHole)   \
-  V(ThrowSuperNotCalledIfHole)   \
-  V(ThrowSuperAlreadyCalledIfNotHole)
+#define IGNORED_BYTECODE_LIST(V)      \
+  V(CallNoFeedback)                   \
+  V(LdaNamedPropertyNoFeedback)       \
+  V(StackCheck)                       \
+  V(StaNamedPropertyNoFeedback)       \
+  V(TestEqual)                        \
+  V(TestEqualStrict)                  \
+  V(TestGreaterThan)                  \
+  V(TestGreaterThanOrEqual)           \
+  V(TestInstanceOf)                   \
+  V(TestLessThan)                     \
+  V(TestLessThanOrEqual)              \
+  V(TestNull)                         \
+  V(TestReferenceEqual)               \
+  V(TestTypeOf)                       \
+  V(TestUndefined)                    \
+  V(TestUndetectable)                 \
+  V(ThrowReferenceErrorIfHole)        \
+  V(ThrowSuperAlreadyCalledIfNotHole) \
+  V(ThrowSuperNotCalledIfHole)
 
-#define SUPPORTED_BYTECODE_LIST(V) \
-  V(CallAnyReceiver)               \
-  V(CallNoFeedback)                \
-  V(CallProperty)                  \
-  V(CallProperty0)                 \
-  V(CallProperty1)                 \
-  V(CallProperty2)                 \
-  V(CallUndefinedReceiver)         \
-  V(CallUndefinedReceiver0)        \
-  V(CallUndefinedReceiver1)        \
-  V(CallUndefinedReceiver2)        \
-  V(CallWithSpread)                \
-  V(Construct)                     \
-  V(ConstructWithSpread)           \
-  V(CreateClosure)                 \
-  V(ExtraWide)                     \
-  V(Illegal)                       \
-  V(LdaConstant)                   \
-  V(LdaKeyedProperty)              \
-  V(LdaNull)                       \
-  V(Ldar)                          \
-  V(LdaSmi)                        \
-  V(LdaUndefined)                  \
-  V(LdaZero)                       \
-  V(Mov)                           \
-  V(Return)                        \
-  V(StackCheck)                    \
-  V(StaInArrayLiteral)             \
-  V(StaKeyedProperty)              \
-  V(Star)                          \
-  V(Wide)                          \
-  CLEAR_ENVIRONMENT_LIST(V)        \
-  CLEAR_ACCUMULATOR_LIST(V)        \
-  CONDITIONAL_JUMPS_LIST(V)        \
-  UNCONDITIONAL_JUMPS_LIST(V)      \
-  INGORED_BYTECODE_LIST(V)
+#define SUPPORTED_BYTECODE_LIST(V)   \
+  V(CallAnyReceiver)                 \
+  V(CallProperty)                    \
+  V(CallProperty0)                   \
+  V(CallProperty1)                   \
+  V(CallProperty2)                   \
+  V(CallUndefinedReceiver)           \
+  V(CallUndefinedReceiver0)          \
+  V(CallUndefinedReceiver1)          \
+  V(CallUndefinedReceiver2)          \
+  V(CallWithSpread)                  \
+  V(Construct)                       \
+  V(ConstructWithSpread)             \
+  V(CreateClosure)                   \
+  V(ExtraWide)                       \
+  V(GetSuperConstructor)             \
+  V(Illegal)                         \
+  V(LdaFalse)                        \
+  V(LdaConstant)                     \
+  V(LdaGlobal)                       \
+  V(LdaGlobalInsideTypeof)           \
+  V(LdaKeyedProperty)                \
+  V(LdaLookupGlobalSlot)             \
+  V(LdaLookupGlobalSlotInsideTypeof) \
+  V(LdaNamedProperty)                \
+  V(LdaNull)                         \
+  V(Ldar)                            \
+  V(LdaSmi)                          \
+  V(LdaTheHole)                      \
+  V(LdaTrue)                         \
+  V(LdaUndefined)                    \
+  V(LdaZero)                         \
+  V(Mov)                             \
+  V(Return)                          \
+  V(StaGlobal)                       \
+  V(StaInArrayLiteral)               \
+  V(StaKeyedProperty)                \
+  V(StaNamedProperty)                \
+  V(Star)                            \
+  V(TestIn)                          \
+  V(Wide)                            \
+  CLEAR_ENVIRONMENT_LIST(V)          \
+  CLEAR_ACCUMULATOR_LIST(V)          \
+  CONDITIONAL_JUMPS_LIST(V)          \
+  UNCONDITIONAL_JUMPS_LIST(V)        \
+  IGNORED_BYTECODE_LIST(V)
 
 class JSHeapBroker;
 
@@ -178,9 +188,9 @@ class CompilationSubject {
   MaybeHandle<JSFunction> closure_;
 };
 
-typedef ZoneSet<Handle<Object>, HandleComparator<Object>> ConstantsSet;
-typedef ZoneSet<Handle<Map>, HandleComparator<Map>> MapsSet;
-typedef ZoneSet<FunctionBlueprint> BlueprintsSet;
+using ConstantsSet = ZoneSet<Handle<Object>, HandleComparator<Object>>;
+using MapsSet = ZoneSet<Handle<Map>, HandleComparator<Map>>;
+using BlueprintsSet = ZoneSet<FunctionBlueprint>;
 
 class Hints {
  public:
@@ -205,7 +215,7 @@ class Hints {
   BlueprintsSet function_blueprints_;
 };
 
-typedef ZoneVector<Hints> HintsVector;
+using HintsVector = ZoneVector<Hints>;
 
 // The SerializerForBackgroundCompilation makes sure that the relevant function
 // data such as bytecode, SharedFunctionInfo and FeedbackVector, used by later
@@ -237,15 +247,25 @@ class SerializerForBackgroundCompilation {
   void ProcessCallVarArgs(interpreter::BytecodeArrayIterator* iterator,
                           ConvertReceiverMode receiver_mode,
                           bool with_spread = false);
+
   void ProcessJump(interpreter::BytecodeArrayIterator* iterator);
   void MergeAfterJump(interpreter::BytecodeArrayIterator* iterator);
+
+  void ProcessNamedPropertyAccess(interpreter::BytecodeArrayIterator* iterator,
+                                  AccessMode mode);
+  void ProcessNamedPropertyAccess(Hints const& receiver, NameRef const& name,
+                                  FeedbackSlot slot, AccessMode mode);
+
+  GlobalAccessFeedback const* ProcessFeedbackForGlobalAccess(FeedbackSlot slot);
+  void ProcessFeedbackForKeyedPropertyAccess(FeedbackSlot slot,
+                                             AccessMode mode);
+  void ProcessFeedbackForNamedPropertyAccess(FeedbackSlot slot,
+                                             NameRef const& name);
+  void ProcessMapForNamedPropertyAccess(MapRef const& map, NameRef const& name);
 
   Hints RunChildSerializer(CompilationSubject function,
                            base::Optional<Hints> new_target,
                            const HintsVector& arguments, bool with_spread);
-
-  void ProcessFeedbackForKeyedPropertyAccess(
-      interpreter::BytecodeArrayIterator* iterator);
 
   JSHeapBroker* broker() const { return broker_; }
   Zone* zone() const { return zone_; }

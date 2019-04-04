@@ -48,7 +48,7 @@ class V8_EXPORT_PRIVATE JSNativeContextSpecialization final
     kAccessorInliningEnabled = 1u << 0,
     kBailoutOnUninitialized = 1u << 1
   };
-  typedef base::Flags<Flag> Flags;
+  using Flags = base::Flags<Flag>;
 
   JSNativeContextSpecialization(Editor* editor, JSGraph* jsgraph,
                                 JSHeapBroker* broker, Flags flags,
@@ -116,7 +116,8 @@ class V8_EXPORT_PRIVATE JSNativeContextSpecialization final
                                Node* index = nullptr);
   Reduction ReduceGlobalAccess(Node* node, Node* receiver, Node* value,
                                Handle<Name> name, AccessMode access_mode,
-                               Node* index, Handle<PropertyCell> property_cell);
+                               Node* index,
+                               PropertyCellRef const& property_cell);
   Reduction ReduceKeyedLoadFromHeapConstant(Node* node, Node* index,
                                             FeedbackNexus const& nexus,
                                             AccessMode access_mode,

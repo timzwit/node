@@ -254,8 +254,8 @@ TNode<Number> CodeAssembler::NumberConstant(double value) {
     // deferring allocation to code generation
     // (see AllocateAndInstallRequestedHeapObjects) since that makes it easier
     // to generate constant lookups for embedded builtins.
-    return UncheckedCast<Number>(
-        HeapConstant(isolate()->factory()->NewHeapNumber(value, TENURED)));
+    return UncheckedCast<Number>(HeapConstant(
+        isolate()->factory()->NewHeapNumber(value, AllocationType::kOld)));
   }
 }
 
@@ -1009,6 +1009,11 @@ Node* CodeAssembler::Store(Node* base, Node* offset, Node* value) {
                                 value, kFullWriteBarrier);
 }
 
+Node* CodeAssembler::StoreEphemeronKey(Node* base, Node* offset, Node* value) {
+  return raw_assembler()->Store(MachineRepresentation::kTagged, base, offset,
+                                value, kEphemeronKeyWriteBarrier);
+}
+
 Node* CodeAssembler::StoreNoWriteBarrier(MachineRepresentation rep, Node* base,
                                          Node* value) {
   return raw_assembler()->Store(rep, base, value, kNoWriteBarrier);
@@ -1108,9 +1113,9 @@ void CodeAssembler::GotoIfException(Node* node, Label* if_exception,
 }
 
 TNode<HeapObject> CodeAssembler::OptimizedAllocate(TNode<IntPtrT> size,
-                                                   PretenureFlag pretenure) {
+                                                   AllocationType allocation) {
   return UncheckedCast<HeapObject>(
-      raw_assembler()->OptimizedAllocate(size, pretenure));
+      raw_assembler()->OptimizedAllocate(size, allocation));
 }
 
 void CodeAssembler::HandleException(Node* node) {

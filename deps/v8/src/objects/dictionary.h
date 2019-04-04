@@ -25,10 +25,10 @@ class Isolate;
 
 template <typename Derived, typename Shape>
 class Dictionary : public HashTable<Derived, Shape> {
-  typedef HashTable<Derived, Shape> DerivedHashTable;
+  using DerivedHashTable = HashTable<Derived, Shape>;
 
  public:
-  typedef typename Shape::Key Key;
+  using Key = typename Shape::Key;
   // Returns the value at entry.
   Object ValueAt(int entry) {
     return this->get(DerivedHashTable::EntryToIndex(entry) + 1);
@@ -126,7 +126,7 @@ class NameDictionaryShape : public BaseDictionaryShape<Handle<Name>> {
 
 template <typename Derived, typename Shape>
 class BaseNameDictionary : public Dictionary<Derived, Shape> {
-  typedef typename Shape::Key Key;
+  using Key = typename Shape::Key;
 
  public:
   static const int kNextEnumerationIndexIndex =
@@ -159,7 +159,7 @@ class BaseNameDictionary : public Dictionary<Derived, Shape> {
   // Creates a new dictionary.
   V8_WARN_UNUSED_RESULT static Handle<Derived> New(
       Isolate* isolate, int at_least_space_for,
-      PretenureFlag pretenure = NOT_TENURED,
+      AllocationType allocation = AllocationType::kYoung,
       MinimumCapacity capacity_option = USE_DEFAULT_MINIMUM_CAPACITY);
 
   // Collect the keys into the given KeyAccumulator, in ascending chronological
